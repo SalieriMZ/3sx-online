@@ -1,0 +1,68 @@
+name: Build (Android)
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
+      - name: Cache cross-compiled deps
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: ${{ runner.os }}-android-deps-${{ hashFiles('build-deps-android.sh') }}
+
+      - name: Install host build deps
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake build-essential cmake libtool nasm ninja-build pkg-config python3 yasm
+
+      - name: Cross-compile native libraries
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: bash build-deps-android.sh
+
+      - name: Build APK
+        working-directory: android-project
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Verify APK ships engine only (no Capcom AFS bundled)
+        run: |
+          for apk in android-project/app/build/outputs/apk/debug/*.apk; do
+            if unzip -l "$apk" | grep -iE "SF33RD\.AFS"; then
+              echo "FAIL: SF33RD.AFS bundled in $apk — refusing to upload."
+              exit 1
+            fi
+          done
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3sx-android-debug
+          path: android-project/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

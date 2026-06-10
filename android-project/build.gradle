@@ -1,0 +1,19 @@
+// Root Gradle project for the 3SX Android port.
+// Plugin versions matched to Android Studio Iguana / NDK 26.1.
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}

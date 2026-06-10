@@ -1,0 +1,15 @@
+# Gradle wrapper cache (per-machine, never source-controlled)
+.gradle/
+build/
+
+# Local IDE / build outputs
+app/build/
+app/release/
+local.properties
+
+# APK signing artifacts (keystore stays off repo)
+*.jks
+*.keystore
+
+# Prebuilt natives (build-deps-android.sh + cmake regenerate these)
+app/src/main/jniLibs/

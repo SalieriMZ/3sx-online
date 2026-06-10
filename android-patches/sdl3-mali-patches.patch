@@ -1,0 +1,87 @@
+diff --git a/src/gpu/vulkan/SDL_gpu_vulkan.c b/src/gpu/vulkan/SDL_gpu_vulkan.c
+index 7ea1036..490d741 100644
+--- a/src/gpu/vulkan/SDL_gpu_vulkan.c
++++ b/src/gpu/vulkan/SDL_gpu_vulkan.c
+@@ -4645,7 +4645,26 @@ static Uint32 VULKAN_INTERNAL_CreateSwapchain(
+ #else
+     swapchainCreateInfo.preTransform = swapchainSupportDetails.capabilities.currentTransform;
+ #endif
+-    swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++    // Mali-G615 and many other Android GPUs don't support OPAQUE composite
++    // alpha — the compositor handles alpha via INHERIT. Hard-coding OPAQUE
++    // causes the driver to accept the swapchain in a degraded blending mode
++    // → flickering + heavy frame stalls (game drops to ~20 FPS on Mali).
++    // Fall back through the supported bits in preference order.
++    {
++        VkCompositeAlphaFlagBitsKHR caCandidates[] = {
++            VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
++            VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
++            VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
++            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
++        };
++        swapchainCreateInfo.compositeAlpha = caCandidates[0];
++        for (Uint32 i = 0; i < SDL_arraysize(caCandidates); i++) {
++            if (swapchainSupportDetails.capabilities.supportedCompositeAlpha & caCandidates[i]) {
++                swapchainCreateInfo.compositeAlpha = caCandidates[i];
++                break;
++            }
++        }
++    }
+     swapchainCreateInfo.presentMode = SDLToVK_PresentMode[windowData->presentMode];
+     swapchainCreateInfo.clipped = VK_TRUE;
+     swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+@@ -10531,9 +10550,20 @@ static bool VULKAN_Submit(
+             presentData->windowData->inFlightFences[presentData->windowData->frameCounter] = (SDL_GPUFence*)vulkanCommandBuffer->inFlightFence;
+             (void)SDL_AtomicIncRef(&vulkanCommandBuffer->inFlightFence->referenceCount);
+ 
++            // On Android, Mali drivers report SUBOPTIMAL every frame after
++            // orientation transform mismatch (app requests landscape, surface
++            // is in portrait or vice-versa). Treating SUBOPTIMAL as recreate
++            // creates an infinite recreate loop → 20 FPS. Only recreate on
++            // the hard OUT_OF_DATE error.
++#ifdef SDL_PLATFORM_ANDROID
++            if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
++                presentData->windowData->needsSwapchainRecreate = true;
++            }
++#else
+             if (presentResult == VK_SUBOPTIMAL_KHR || presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
+                 presentData->windowData->needsSwapchainRecreate = true;
+             }
++#endif
+         } else {
+             if (presentResult != VK_SUCCESS) {
+                 VULKAN_INTERNAL_ReleaseCommandBuffer(vulkanCommandBuffer);
+@@ -11186,11 +11216,20 @@ static Uint8 VULKAN_INTERNAL_IsDeviceSuitable(
+     renderer->vkGetPhysicalDeviceFeatures(
+         physicalDevice,
+         &deviceFeatures);
++    // shaderClipDistance is unavailable on many mobile GPUs (Mali in
++    // particular). 3SX doesn't actually use gl_ClipDistance in its
++    // shaders, so accept the device without it.
+     if (!deviceFeatures.independentBlend ||
+         !deviceFeatures.imageCubeArray ||
+         !deviceFeatures.depthClamp ||
+-        !deviceFeatures.shaderClipDistance ||
+         !deviceFeatures.drawIndirectFirstInstance) {
++        SDL_LogWarn(SDL_LOG_CATEGORY_GPU,
++            "Vulkan device missing required features: independentBlend=%d "
++            "imageCubeArray=%d depthClamp=%d drawIndirectFirstInstance=%d",
++            deviceFeatures.independentBlend,
++            deviceFeatures.imageCubeArray,
++            deviceFeatures.depthClamp,
++            deviceFeatures.drawIndirectFirstInstance);
+         return 0;
+     }
+ 
+@@ -11435,7 +11474,10 @@ static Uint8 VULKAN_INTERNAL_CreateLogicalDevice(
+     desiredDeviceFeatures.samplerAnisotropy = VK_TRUE;
+     desiredDeviceFeatures.imageCubeArray = VK_TRUE;
+     desiredDeviceFeatures.depthClamp = VK_TRUE;
+-    desiredDeviceFeatures.shaderClipDistance = VK_TRUE;
++    // shaderClipDistance gated on availability — Mali drivers often skip it.
++    if (haveDeviceFeatures.shaderClipDistance) {
++        desiredDeviceFeatures.shaderClipDistance = VK_TRUE;
++    }
+     desiredDeviceFeatures.drawIndirectFirstInstance = VK_TRUE;
+ 
+     if (haveDeviceFeatures.fillModeNonSolid) {

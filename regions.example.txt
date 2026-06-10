@@ -1,0 +1,21 @@
+# Fistbump matchmaking regions.
+#
+# Format: code|label|host|port
+#   code   short identifier (max 15 chars). Used as the persisted key.
+#   label  human-readable name shown in UI (max 47 chars).
+#   host   IPv4 or DNS hostname of the matchmaking server.
+#   port   TCP port (server's --tcp-port flag).
+#
+# - Lines beginning with `#` are comments. Blank lines are ignored.
+# - At most 16 regions are loaded; extras are ignored.
+# - Place this file at one of:
+#     1) <prefpath>/regions.txt  (user-editable, takes priority)
+#     2) <resources>/regions.txt (bundled with the build)
+#
+# The reference public server is available; uncomment the line below if you
+# don't run your own. Otherwise replace with the hostname of your server.
+
+# us-east-1|US East|fistbump.example.com|19000
+# eu-west-1|EU West|fistbump-eu.example.com|19000
+# sa-east-1|South America|fistbump-sa.example.com|19000
+local|Local|127.0.0.1|9000

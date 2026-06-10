@@ -1,0 +1,60 @@
+name: Build (Vita)
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install host tools
+        run: apk add --no-cache bash cmake ninja python3
+
+      - name: Cache cross-compiled deps
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: ${{ runner.os }}-vita-deps-${{ hashFiles('build-deps-vita.sh', 'build-ffmpeg-vita.sh') }}
+
+      - name: Cross-compile native libraries
+        run: |
+          bash build-deps-vita.sh
+          bash build-ffmpeg-vita.sh
+
+      - name: Configure
+        run: |
+          cmake -B build-vita \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+
+      - name: Build VPK
+        run: cmake --build build-vita --target 3sx.vpk -j
+
+      - name: Verify VPK ships engine only (no Capcom AFS bundled)
+        run: |
+          # If a packaged VPK happens to contain SF33RD.AFS the artifact would
+          # carry Capcom IP. Fail loudly rather than upload such a build.
+          if unzip -l build-vita/3sx.vpk | grep -iE "SF33RD\.AFS"; then
+            echo "FAIL: SF33RD.AFS bundled in VPK — refusing to upload."
+            exit 1
+          fi
+
+      - name: Upload VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3sx-vita-vpk
+          path: build-vita/3sx.vpk
+          if-no-files-found: error
