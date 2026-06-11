@@ -1,0 +1,102 @@
+name: server-status
+
+# Polls each baked-in region every 10 minutes and writes a shields.io endpoint
+# JSON to the `status` branch. The README badge references that file, so users
+# can tell at a glance whether the matchmaking servers are reachable before
+# downloading a build.
+#
+# Hosts probed here MUST match what the "chambeadores" release flavour bakes
+# into regions.txt. Forkers running their own infra should change this list to
+# their own hosts.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: status
+          fetch-depth: 1
+        continue-on-error: true
+
+      - name: Bootstrap status branch if missing
+        run: |
+          if [ ! -d .git ] || ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+            git init
+            git checkout --orphan status
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+          fi
+          mkdir -p status
+
+      - name: Probe matchmaking hosts
+        id: probe
+        run: |
+          set -e
+          declare -A HOSTS=(
+            [us-east-1]=44.220.2.85:19000
+            [sa-east-1]=56.126.80.178:19000
+          )
+          any_down=0
+          summary=""
+          for code in "${!HOSTS[@]}"; do
+            ip="${HOSTS[$code]%:*}"
+            port="${HOSTS[$code]#*:}"
+            label="$code"
+            if nc -z -w 5 "$ip" "$port" 2>/dev/null; then
+              msg="online"
+              color="brightgreen"
+            else
+              msg="offline"
+              color="red"
+              any_down=1
+            fi
+            cat > "status/${code}.json" <<JSON
+          {
+            "schemaVersion": 1,
+            "label": "${label}",
+            "message": "${msg}",
+            "color": "${color}",
+            "cacheSeconds": 300
+          }
+          JSON
+            summary+="${code}=${msg} "
+          done
+          # Aggregate badge.
+          if [ "$any_down" = "0" ]; then
+            agg_msg="all online"; agg_color="brightgreen"
+          else
+            agg_msg="degraded"; agg_color="orange"
+          fi
+          cat > status/all.json <<JSON
+          {
+            "schemaVersion": 1,
+            "label": "fistbump",
+            "message": "${agg_msg}",
+            "color": "${agg_color}",
+            "cacheSeconds": 300
+          }
+          JSON
+          echo "summary: $summary"
+          date -u +%Y-%m-%dT%H:%M:%SZ > status/last-probe.txt
+
+      - name: Commit + push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add status/
+          if git diff --cached --quiet; then
+            echo "no change"
+          else
+            git commit -m "status: probe $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin HEAD:status
+          fi

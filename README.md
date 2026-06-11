@@ -1,5 +1,9 @@
 # 3SX Online
 
+[![us-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/us-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
+[![sa-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/sa-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
+[![fistbump](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/all.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
+
 A **community-built online layer** for *Street Fighter III: 3rd Strike* — rollback netcode + cross-region matchmaking + custom rooms + ELO, on top of the [crowded-street/3sx](https://github.com/crowded-street/3sx) native decompilation.
 
 Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Android** (phones + tablets + Android TV), and **PlayStation Vita**. PC ↔ Vita ↔ Android cross-play confirmed working on real hardware.
@@ -87,13 +91,32 @@ local|Local|127.0.0.1|9000
 
 The file is looked up in this order (first match wins):
 
-| Platform | User override | Bundled default |
-|---|---|---|
-| Windows / macOS / Linux | `<install>/regions.txt` | `<install>/resources/regions.txt` |
-| Android | `<app private files>/regions.txt` | bundled assets |
-| Vita | `ux0:data/CrowdedStreet/3SX/regions.txt` | `app0:/resources/regions.txt` |
+| Platform | User override (highest priority) | OS-managed prefs dir | Bundled default |
+|---|---|---|---|
+| Windows | `%APPDATA%\CrowdedStreet\3SX\regions.txt` | (same) | `<install>\regions.txt` then `<install>\resources\regions.txt` |
+| macOS | `~/Library/Application Support/CrowdedStreet/3SX/regions.txt` | (same) | `<install>/regions.txt` then `<install>/resources/regions.txt` |
+| Linux | `~/.local/share/CrowdedStreet/3SX/regions.txt` | (same) | `<install>/regions.txt` then `<install>/resources/regions.txt` |
+| Android | `/data/data/cl.chambeadores.threesx/files/regions.txt` | (same — copied from `assets/regions.txt` on first launch) | APK `assets/regions.txt` |
+| Vita | `ux0:data/CrowdedStreet/3SX/regions.txt` | (same) | `app0:/resources/regions.txt` |
 
 A starter template is at [`regions.example.txt`](regions.example.txt). Either ship your own list with the build (per the build steps below) or drop one alongside the installed binary.
+
+You can confirm which path the game actually loaded by running `3sx --version` and then checking `netplay.log` in the prefs dir — a line like `[REGION] loaded 2 region(s) from basepath=...` shows the resolution path.
+
+### Deploying with your own infrastructure
+
+The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server). If you're running your own instance and packaging a build for your community, the knobs you'll want to know about are:
+
+| What | Where | Notes |
+|---|---|---|
+| Matchmaking host + port | `regions.txt` (`code\|label\|host\|port` lines) | Up to 16 entries. The game pings each at startup and the in-game picker auto-selects the lowest-latency one. |
+| Discord Rich Presence app | `-DDISCORD_APP_ID=<id>` at cmake configure time | Register an app at <https://discord.com/developers/applications>. Omit the flag for an RPC-free build (presence is a no-op stub). |
+| Launcher update URL | `FISTBUMP_UPDATE_BASE_URL` env var when launching the launcher | Defaults to `http://<first-region-host>:20000`. Point at your stats/HTTP endpoint to enable auto-updates. Failures are silent — the launcher always lets the user click *Play*. |
+| Launcher region list (override) | `FISTBUMP_REGIONS="code\|label\|host\|port;..."` env var | Overrides the launcher's default region dropdown without touching `regions.txt` on the game side. |
+| Build version stamp | `-DBUILD_VERSION=1.7.27` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
+| Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
+
+For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.27` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
 ---
 
@@ -158,6 +181,22 @@ Tested on Windows 10 + 11. Visual Studio is *not* used.
 
 To embed your Discord application ID for Rich Presence, pass `-DDISCORD_APP_ID=<id>` to the first cmake invocation. Omit for an RPC-free build.
 
+To verify what you built, run:
+
+```bash
+build/application/bin/3sx.exe --version
+```
+
+This prints version + git SHA + platform + build date + Discord App ID + whether netplay is enabled. Useful when triaging "which build is the user actually running" reports.
+
+To package a ready-to-share zip with the DLL closure pre-pruned, run:
+
+```bash
+DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.27
+```
+
+Output is at `dist/3sx-1.7.27-pc.zip`.
+
 ### Android
 
 Tested with NDK r26b on Linux + macOS + Windows hosts. Use a separate clone — Android cross-compile writes to different `build*` dirs and gets confused by leftover MSYS state.
@@ -193,6 +232,14 @@ Tested with NDK r26b on Linux + macOS + Windows hosts. Use a separate clone — 
    ```
 
 **To bundle `SF33RD.AFS` inside the APK** (so users don't need SAF on first run), drop it at `android-project/app/src/main/assets/SF33RD.AFS` *before* building. **Do not redistribute the resulting APK** — it contains Capcom IP.
+
+#### Android caveats
+
+- **ABI**: the build script targets `arm64-v8a` only. Override with `ANDROID_ABI=x86_64` or `armeabi-v7a` env vars when invoking `bash build.sh android`, but third-party deps need to be re-cross-compiled for that ABI first (run `ABI=x86_64 bash build-deps-android.sh`).
+- **API level**: targets API 29 (Android 10). Override with `ANDROID_API=` if you need an older floor — deps will need to be re-built.
+- **Input**: there are no on-screen touch controls. A Bluetooth gamepad (or any HID gamepad over USB-C OTG) is required to play.
+- **Audio**: ADX music depends on the cross-compiled FFmpeg libs being present in `jniLibs/<abi>/`. `build.sh android` copies them automatically; if you're running `gradlew assembleDebug` directly you need to stage them yourself.
+- **Updates**: the Android build has no launcher / in-app update flow. New versions ship as new APKs.
 
 ### PlayStation Vita
 
@@ -271,6 +318,9 @@ build-deps-android.sh     Android dep cross-compile (calls NDK).
 build-deps-vita.sh        Vita dep cross-compile (calls vitasdk via Docker).
 build-ffmpeg-vita.sh      Custom Vita ffmpeg with adpcm_adx decoder.
 build.sh                  One-shot orchestrator: `bash build.sh <pc|android|vita>`.
+dist.sh                   Packager: `bash dist.sh <pc|android|vita> [version]`
+                          produces dist/3sx-<version>-<target>.zip with DLL
+                          closure resolved + optional regions.txt + launcher.
 regions.example.txt       Annotated template for the runtime region list.
 ```
 
