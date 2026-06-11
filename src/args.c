@@ -5,6 +5,45 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#ifndef BUILD_VERSION
+#define BUILD_VERSION "unknown"
+#endif
+#ifndef BUILD_GIT_SHA
+#define BUILD_GIT_SHA "unknown"
+#endif
+
+#if defined(__ANDROID__)
+#define BUILD_PLATFORM_STR "android"
+#elif defined(__vita__)
+#define BUILD_PLATFORM_STR "vita"
+#elif defined(_WIN32)
+#define BUILD_PLATFORM_STR "windows"
+#elif defined(__APPLE__)
+#define BUILD_PLATFORM_STR "macos"
+#elif defined(__linux__)
+#define BUILD_PLATFORM_STR "linux"
+#else
+#define BUILD_PLATFORM_STR "unknown"
+#endif
+
+#ifdef DISCORD_APP_ID
+#define BUILD_DISCORD_STR DISCORD_APP_ID
+#else
+#define BUILD_DISCORD_STR "(disabled)"
+#endif
+
+static void print_version(void) {
+    printf("3sx %s (%s) %s\n", BUILD_VERSION, BUILD_GIT_SHA, BUILD_PLATFORM_STR);
+    printf("  build date:    %s %s\n", __DATE__, __TIME__);
+    printf("  discord_app_id: %s\n", BUILD_DISCORD_STR);
+#if NETPLAY_ENABLED
+    printf("  netplay:       enabled\n");
+#else
+    printf("  netplay:       disabled\n");
+#endif
+}
 
 static Args args = { 0 };
 
@@ -48,6 +87,15 @@ static void verify_configuration(const Args* args) {
 }
 
 void init_args(int argc, const char* argv[]) {
+    // Pre-scan for --version so a quick `3sx --version` doesn't crash trying
+    // to open a window. SDL/argparse take the rest from there.
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] != NULL && (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0)) {
+            print_version();
+            exit(0);
+        }
+    }
+
     struct argparse_option options[] = {
         OPT_HELP(),
 

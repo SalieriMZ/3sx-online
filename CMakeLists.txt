@@ -139,6 +139,28 @@ if(DEFINED DISCORD_APP_ID)
     target_compile_definitions(3sx PRIVATE DISCORD_APP_ID="${DISCORD_APP_ID}")
 endif()
 
+# Build identification baked in for `3sx --version`. BUILD_VERSION can be
+# overridden via -DBUILD_VERSION=...; otherwise we use the project version.
+# BUILD_GIT_SHA is auto-detected from the working tree when not provided.
+if(NOT DEFINED BUILD_VERSION)
+    set(BUILD_VERSION "1.7.27")
+endif()
+if(NOT DEFINED BUILD_GIT_SHA)
+    execute_process(
+        COMMAND git -C ${CMAKE_SOURCE_DIR} rev-parse --short HEAD
+        OUTPUT_VARIABLE BUILD_GIT_SHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT BUILD_GIT_SHA)
+        set(BUILD_GIT_SHA "unknown")
+    endif()
+endif()
+target_compile_definitions(3sx PRIVATE
+    BUILD_VERSION="${BUILD_VERSION}"
+    BUILD_GIT_SHA="${BUILD_GIT_SHA}"
+)
+
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
     set(DISABLED_WARNINGS
         -Wpointer-to-int-cast
