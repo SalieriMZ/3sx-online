@@ -33,7 +33,19 @@ mkdir -p "$DIST"
 
 # -------- Build --------
 echo "==> dist.sh: building $TARGET (version=$VERSION)"
-BUILD_VERSION="$VERSION" bash "$HERE/build.sh" "$TARGET"
+# Forward release-relevant env vars to build.sh. Without `export` the child
+# bash inherits a clean env so DISCORD_APP_ID + ANDROID_ABI etc. would be
+# silently dropped.
+export BUILD_VERSION="$VERSION"
+[ -n "${DISCORD_APP_ID:-}" ]   && export DISCORD_APP_ID
+[ -n "${BUILD_GIT_SHA:-}" ]    && export BUILD_GIT_SHA
+[ -n "${ANDROID_ABI:-}" ]      && export ANDROID_ABI
+[ -n "${ANDROID_API:-}" ]      && export ANDROID_API
+[ -n "${ANDROID_NDK_HOME:-}" ] && export ANDROID_NDK_HOME
+[ -n "${ANDROID_HOME:-}" ]     && export ANDROID_HOME
+[ -n "${JAVA_HOME:-}" ]        && export JAVA_HOME
+[ -n "${JOBS:-}" ]             && export JOBS
+bash "$HERE/build.sh" "$TARGET"
 
 # -------- Stage layout --------
 STAGE="$DIST/3sx-$VERSION-$TARGET"
