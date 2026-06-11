@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "label": "us-east-1",
+  "message": "online",
+  "color": "brightgreen",
+  "cacheSeconds": 300
+}
