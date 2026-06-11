@@ -40,6 +40,17 @@ fi
 
 echo "Using $BUILD_JOBS build job(s)"
 
+# An empty build dir is NOT proof a dep is installed — earlier versions of
+# this script checked for the dir's existence and got stuck "already built"
+# loops when a build failed midway. Probe for an actual library artefact.
+dep_already_built() {
+    local build_dir="$1"
+    [ -d "$build_dir/lib" ] || return 1
+    find "$build_dir/lib" -maxdepth 2 \
+        \( -name "*.a" -o -name "*.so" -o -name "*.so.*" -o -name "*.dll.a" -o -name "*.dylib" \) \
+        -print -quit 2>/dev/null | grep -q .
+}
+
 # -----------------------------
 # FFmpeg
 # -----------------------------
@@ -48,7 +59,7 @@ FFMPEG="ffmpeg-8.0"
 FFMPEG_DIR="$THIRD_PARTY/ffmpeg"
 FFMPEG_BUILD="$FFMPEG_DIR/build"
 
-if [ -d "$FFMPEG_BUILD" ]; then
+if dep_already_built "$FFMPEG_BUILD"; then
     echo "FFmpeg already built at $FFMPEG_BUILD"
 else
     echo "Building FFmpeg..."
@@ -124,7 +135,7 @@ SDL_TAG="release-3.4.4"
 SDL_DIR="$THIRD_PARTY/sdl3"
 SDL_BUILD="$SDL_DIR/build"
 
-if [ -d "$SDL_BUILD" ]; then
+if dep_already_built "$SDL_BUILD"; then
     echo "SDL3 already built at $SDL_BUILD"
 else
     echo "Building SDL3 at $SDL_BUILD..."
@@ -159,7 +170,7 @@ GEKKONET_REF="7be848c"
 GEKKONET_DIR="$THIRD_PARTY/GekkoNet"
 GEKKONET_BUILD="$GEKKONET_DIR/build"
 
-if [ -d "$GEKKONET_BUILD" ]; then
+if dep_already_built "$GEKKONET_BUILD"; then
     echo "GekkoNet already built at $GEKKONET_BUILD"
 else
     echo "Building GekkoNet @ $GEKKONET_REF..."
@@ -191,7 +202,7 @@ SDL3_NET_REF="92022dc"
 SDL3_NET_DIR="$THIRD_PARTY/SDL_net"
 SDL3_NET_BUILD="$SDL3_NET_DIR/build"
 
-if [ -d "$SDL3_NET_BUILD" ]; then
+if dep_already_built "$SDL3_NET_BUILD"; then
     echo "SDL3_net already built at $SDL3_NET_BUILD"
 else
     echo "Building SDL3_net @ $SDL3_NET_REF..."
@@ -222,7 +233,7 @@ LIBCDIO="libcdio-$LIBCDIO_VERSION"
 LIBCDIO_DIR="$THIRD_PARTY/libcdio"
 LIBCDIO_BUILD="$LIBCDIO_DIR/build"
 
-if [ -d "$LIBCDIO_DIR" ]; then
+if dep_already_built "$LIBCDIO_BUILD"; then
     echo "libcdio already built at $LIBCDIO_BUILD"
 else
     echo "Building libcdio..."
@@ -264,7 +275,7 @@ MINIZIP_NG_TAG="4.1.0"
 MINIZIP_NG_DIR="$THIRD_PARTY/minizip-ng"
 MINIZIP_NG_BUILD="$MINIZIP_NG_DIR/build"
 
-if [ -d "$MINIZIP_NG_BUILD" ]; then
+if dep_already_built "$MINIZIP_NG_BUILD"; then
     echo "minizip-ng already built at $MINIZIP_NG_BUILD"
 else
     echo "Building minizip-ng @ $MINIZIP_NG_BUILD..."
@@ -309,7 +320,7 @@ TF_PSA_CRYPTO_URL="https://github.com/Mbed-TLS/TF-PSA-Crypto/releases/download/t
 TF_PSA_CRYPTO_DIR="$THIRD_PARTY/tf-psa-crypto"
 TF_PSA_CRYPTO_BUILD="$TF_PSA_CRYPTO_DIR/build"
 
-if [ -d "$TF_PSA_CRYPTO_BUILD" ]; then
+if dep_already_built "$TF_PSA_CRYPTO_BUILD"; then
     echo "tf-psa-crypto already built at $TF_PSA_CRYPTO_BUILD"
 else
     echo "Building tf-psa-crypto @ $TF_PSA_CRYPTO_BUILD..."

@@ -41,7 +41,46 @@ case "$TARGET" in
         echo "==> building Android ($JOBS jobs)"
         : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME env required (path to NDK r26b install)}"
         [ -d third_party/SDL_net/build-android ] || bash build-deps-android.sh
+
+        TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+        if [ ! -f "$TOOLCHAIN" ]; then
+            echo "Android toolchain.cmake missing at $TOOLCHAIN" >&2
+            exit 1
+        fi
+
+        ABI="${ANDROID_ABI:-arm64-v8a}"
+        API="${ANDROID_API:-29}"
+        CMAKE_ARGS=(
+            -B build-android -G Ninja
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN"
+            -DANDROID_ABI="$ABI"
+            -DANDROID_PLATFORM="android-$API"
+            -DCMAKE_BUILD_TYPE=Release
+            -DANDROID_STL=c++_shared
+        )
+        if [ -n "${DISCORD_APP_ID:-}" ]; then
+            CMAKE_ARGS+=(-DDISCORD_APP_ID="${DISCORD_APP_ID}")
+        fi
+
+        cmake "${CMAKE_ARGS[@]}"
+        cmake --build build-android --target 3sx -j "$JOBS"
+
+        JNI="android-project/app/src/main/jniLibs/$ABI"
+        mkdir -p "$JNI"
+        cp -v build-android/lib3sx.so "$JNI/"
+        cp -v third_party/sdl3/build-android/lib/libSDL3.so "$JNI/"
+        # Optional ffmpeg .so set — present only when SOUND_ENABLED for Android.
+        for so in third_party/ffmpeg/build-android/lib/libav*.so \
+                  third_party/ffmpeg/build-android/lib/libsw*.so; do
+            [ -f "$so" ] && cp -v "$so" "$JNI/"
+        done
+        # NDK libc++ shared runtime — pre-built sysroot ships it next to clang.
+        LIBCXX=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path "*/aarch64-linux-android/libc++_shared.so" 2>/dev/null | head -1)
+        [ -n "$LIBCXX" ] && cp -v "$LIBCXX" "$JNI/"
+
         cd android-project
+        chmod +x ./gradlew
         ./gradlew assembleDebug --no-daemon
         echo "==> done: $(ls -la app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1)"
         ;;

@@ -37,6 +37,17 @@ android_cmake_args=(
     -DANDROID_STL=c++_shared
 )
 
+# Empty build dir is NOT proof a dep is installed — earlier versions of this
+# script checked dir existence and got stuck "already built" loops when a
+# build failed midway. Probe for an actual library artefact.
+dep_already_built() {
+    local build_dir="$1"
+    [ -d "$build_dir/lib" ] || return 1
+    find "$build_dir/lib" -maxdepth 2 \
+        \( -name "*.a" -o -name "*.so" -o -name "*.so.*" \) \
+        -print -quit 2>/dev/null | grep -q .
+}
+
 # -----------------------------
 # SDL3 (shared lib → libSDL3.so)
 # -----------------------------
@@ -45,7 +56,7 @@ SDL_DIR="$THIRD_PARTY/sdl3"
 SDL_BUILD="$SDL_DIR/build-android"
 SDL_SRC="$SDL_DIR/src"
 
-if [ -d "$SDL_BUILD" ]; then
+if dep_already_built "$SDL_BUILD"; then
     echo "SDL3 already built for Android at $SDL_BUILD"
 else
     echo "Building SDL3 for Android..."
@@ -93,7 +104,7 @@ GEKKONET_REF="7be848c"
 GEKKONET_DIR="$THIRD_PARTY/GekkoNet"
 GEKKONET_BUILD="$GEKKONET_DIR/build-android"
 
-if [ -d "$GEKKONET_BUILD" ]; then
+if dep_already_built "$GEKKONET_BUILD"; then
     echo "GekkoNet already built for Android at $GEKKONET_BUILD"
 else
     echo "Building GekkoNet for Android..."
@@ -108,8 +119,11 @@ else
 
     cmake --build "$GEKKONET_SRC/cmake-build" -j"$BUILD_JOBS"
 
+    # Stage headers + the static lib. `cp -r src/.` is broken under MSYS2's
+    # cygwin path translation; use glob expansion instead.
     mkdir -p "$GEKKONET_BUILD/include" "$GEKKONET_BUILD/lib"
-    cp -r "$GEKKONET_SRC/GekkoLib/include/." "$GEKKONET_BUILD/include/"
+    cp -r "$GEKKONET_SRC/GekkoLib/include/." "$GEKKONET_BUILD/include/" 2>/dev/null \
+        || cp -r "$GEKKONET_SRC/GekkoLib/include/"* "$GEKKONET_BUILD/include/"
     find "$GEKKONET_SRC" -name "*.a" -exec cp {} "$GEKKONET_BUILD/lib/libGekkoNet.a" \;
 
     rm -rf "$GEKKONET_SRC"
@@ -123,7 +137,7 @@ SDL3_NET_REF="92022dc"
 SDL3_NET_DIR="$THIRD_PARTY/SDL_net"
 SDL3_NET_BUILD="$SDL3_NET_DIR/build-android"
 
-if [ -d "$SDL3_NET_BUILD" ]; then
+if dep_already_built "$SDL3_NET_BUILD"; then
     echo "SDL_net already built for Android at $SDL3_NET_BUILD"
 else
     echo "Building SDL_net for Android..."
@@ -152,7 +166,7 @@ MINIZIP_REF="4.1.0"
 MINIZIP_DIR="$THIRD_PARTY/minizip-ng"
 MINIZIP_BUILD="$MINIZIP_DIR/build-android"
 
-if [ -d "$MINIZIP_BUILD" ]; then
+if dep_already_built "$MINIZIP_BUILD"; then
     echo "minizip-ng already built for Android at $MINIZIP_BUILD"
 else
     echo "Building minizip-ng for Android..."
@@ -195,7 +209,7 @@ FFMPEG_DIR="$THIRD_PARTY/ffmpeg"
 FFMPEG_BUILD="$FFMPEG_DIR/build-android"
 FFMPEG_SRC="$FFMPEG_DIR/src"
 
-if [ -d "$FFMPEG_BUILD" ]; then
+if dep_already_built "$FFMPEG_BUILD"; then
     echo "ffmpeg already built for Android at $FFMPEG_BUILD"
 else
     echo "Building ffmpeg for Android..."

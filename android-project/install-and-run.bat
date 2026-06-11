@@ -56,8 +56,18 @@ adb shell "run-as %PKG% stat -c '%%s' files/resources/SF33RD.AFS"
 echo.
 echo [5b/6] Staging shaders into app private storage...
 adb shell "run-as %PKG% mkdir -p files/shaders/sdlgpu/spirv files/shaders/opengl"
-set "SHADERS_LOCAL=%~dp0..\..\..\Downloads\3SX-183b757-windows\bin\shaders"
-if not exist "%SHADERS_LOCAL%" set "SHADERS_LOCAL=%APPDATA%\..\..\..\Documents\3SX\src\3sx\build\application\shaders"
+REM Probe in order:
+REM   1. shaders/ sibling to this bat (works inside any dist zip)
+REM   2. %APPDATA%\CrowdedStreet\3SX\shaders\ (already staged by a desktop install)
+REM   3. SHADERS env var, for power users
+set "SHADERS_LOCAL=%~dp0shaders"
+if not exist "%SHADERS_LOCAL%" set "SHADERS_LOCAL=%APPDATA%\CrowdedStreet\3SX\shaders"
+if not exist "%SHADERS_LOCAL%" set "SHADERS_LOCAL=%SHADERS%"
+if not exist "%SHADERS_LOCAL%" (
+    echo [ERROR] No shader dir found. Put a shaders\ folder next to this .bat,
+    echo         or set SHADERS=^<path^> in your environment.
+    goto :fail
+)
 adb push "%SHADERS_LOCAL%/sdlgpu/spirv" /sdcard/Download/3sx-shaders-spirv >nul
 for /f %%f in ('adb shell ls /sdcard/Download/3sx-shaders-spirv/') do (
     adb shell "cat /sdcard/Download/3sx-shaders-spirv/%%f | run-as %PKG% sh -c 'cat > files/shaders/sdlgpu/spirv/%%f'"
