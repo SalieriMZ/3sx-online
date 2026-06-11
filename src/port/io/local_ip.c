@@ -32,6 +32,7 @@ bool LocalIP_GetPrimary(char* out, size_t out_size) {
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 

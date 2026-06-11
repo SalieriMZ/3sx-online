@@ -56,17 +56,18 @@ static bool parse_line(char* line) {
     return true;
 }
 
-static void load_from_file(const char* path) {
+static bool load_from_file(const char* path) {
     SDL_IOStream* io = SDL_IOFromFile(path, "r");
-    if (io == NULL) return;
+    if (io == NULL) return false;
     Sint64 size = SDL_GetIOSize(io);
-    if (size <= 0 || size > 16 * 1024) { SDL_CloseIO(io); return; }
+    if (size <= 0 || size > 16 * 1024) { SDL_CloseIO(io); return false; }
     char* buf = (char*)SDL_malloc((size_t)size + 1);
-    if (buf == NULL) { SDL_CloseIO(io); return; }
+    if (buf == NULL) { SDL_CloseIO(io); return false; }
     size_t read = SDL_ReadIO(io, buf, (size_t)size);
     SDL_CloseIO(io);
     buf[read] = '\0';
 
+    const int before = region_count;
     char* p = buf;
     while (*p != '\0' && region_count < REGIONS_MAX) {
         char* nl = SDL_strchr(p, '\n');
@@ -76,6 +77,7 @@ static void load_from_file(const char* path) {
         p = nl + 1;
     }
     SDL_free(buf);
+    return region_count > before;
 }
 
 static void Regions_Load(void) {
@@ -83,14 +85,34 @@ static void Regions_Load(void) {
 
     char path[512];
     SDL_snprintf(path, sizeof(path), "%sregions.txt", Paths_GetPrefPath());
-    load_from_file(path);
-    if (region_count > 0) return;
+    if (load_from_file(path)) {
+        Netplay_Log("REGION", "loaded %d region(s) from prefpath=%s", region_count, path);
+        return;
+    }
 
     char* res = Resources_GetPath("regions.txt");
     if (res != NULL) {
-        load_from_file(res);
+        const bool ok = load_from_file(res);
+        if (ok) {
+            Netplay_Log("REGION", "loaded %d region(s) from resources=%s", region_count, res);
+        }
         SDL_free(res);
+        if (region_count > 0) return;
     }
+
+    // Also probe alongside the executable so a flat zip distribution works
+    // without copying anything into the user's prefpath first.
+    const char* base = Paths_GetBasePath();
+    if (base != NULL) {
+        SDL_snprintf(path, sizeof(path), "%sregions.txt", base);
+        if (load_from_file(path)) {
+            Netplay_Log("REGION", "loaded %d region(s) from basepath=%s", region_count, path);
+            return;
+        }
+    }
+
+    Netplay_Log("REGION", "no regions.txt found (probed prefpath=%s, resources=<prefpath>/resources/, basepath=%s) — region picker will show (unknown)",
+                Paths_GetPrefPath(), base ? base : "(null)");
 }
 
 const Region* Regions_Get(int idx) {
