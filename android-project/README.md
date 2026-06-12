@@ -1,74 +1,74 @@
-# 3SX Android port (scaffolding — v1 work-in-progress)
+# 3SX Android
 
-This directory holds the Android-specific glue. The C/C++ game lives under
-`../src/` and is built by the root `CMakeLists.txt`.
+Android-specific glue for 3SX Online. The C/C++ game lives under `../src/`
+and is built by the root `CMakeLists.txt` via NDK `externalNativeBuild`; this
+directory holds the Gradle project, the Java shell (`ThreeSXActivity` on top
+of SDL's `SDLActivity`), and packaging helpers.
 
 ## Status
 
-Source tree is Android-ready (`#ifdef __ANDROID__` gates in `port/creds.c`,
-`port/resources.c`, `platform/netplay/discord_rpc.c`, `args.c`). Root
-`CMakeLists.txt` has an `if(ANDROID)` branch that skips `libcdio` / `ffmpeg`
-/ `tf-psa-crypto` (no ISO parsing, no in-game music, no checksum mode on
-Android v1). The Gradle project here invokes the root CMakeLists via NDK
-externalNativeBuild.
+Fully playable: rendering, **ADX music + sound effects** (cross-compiled
+FFmpeg), online matchmaking + rollback netplay, landscape lock, steady
+60 fps. Tested on real arm64-v8a hardware (Android 10+). A Bluetooth or
+USB-OTG **gamepad is required** — there are no on-screen touch controls yet.
 
-What still needs to happen end-to-end (NOT done in this commit):
+Known gaps: touch controls, lifecycle pause/resume polish, Android TV
+(32-bit `armeabi-v7a`) untested on the current tree, no in-app updates
+(new versions ship as new APKs on the
+[Releases page](https://github.com/SalieriMZ/3sx-online/releases)).
 
-1. **Cross-compile third_party deps for `arm64-v8a`** — see *Build deps* below.
-2. **Copy SDL3 sources into this project** — `org.libsdl.app.SDLActivity`
-   has to be on the Java classpath. Fetch from `libsdl-org/SDL` `release-3.x`
-   branch, `android-project/app/src/main/java/org/libsdl/app/*.java`.
-3. **Get a Gradle wrapper** — run `gradle wrapper` once in this directory
-   (needs a host-installed Gradle 8.5+) to materialize `gradlew` + the
-   wrapper jar.
-4. **App icon resources** — drop a `mipmap/ic_launcher.png` into
-   `app/src/main/res/mipmap-*/`.
-5. **Build + adb install**:
-   ```
-   cd android-project
-   ./gradlew assembleRelease
-   adb install app/build/outputs/apk/release/app-release.apk
-   ```
+## Building
 
-## Build deps for Android
+From the repo root:
 
-NDK 26.1.10909125 is required (already installed via scoop android-clt).
-Toolchain file:
-`%ANDROID_HOME%/ndk/26.1.10909125/build/cmake/android.toolchain.cmake`
-
-Each dependency under `../third_party/` ships a CMake project. To cross-
-compile for arm64-v8a, invoke each with:
-
-```
-cmake -S <dep_src> -B <dep_src>/build-android \
-  -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a \
-  -DANDROID_PLATFORM=android-29 \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build <dep_src>/build-android
+```bash
+bash build-deps-android.sh   # once: cross-compiles SDL3, SDL_net, GekkoNet, minizip-ng, FFmpeg for arm64-v8a
+bash build.sh android        # cmake (NDK toolchain) → stages .so into jniLibs/ → gradlew assembleDebug
 ```
 
-Deps needed for v1:
-- `sdl3` (build as shared lib → `libSDL3.so`; also extract its
-  `android-project/app/src/main/java/org/libsdl/app/` Java sources)
-- `SDL_net` (static `.a` ok)
-- `GekkoNet` (static `.a` ok)
-- `minizip-ng` (static `.a` ok)
+Requirements: JDK 17 + Android SDK with **NDK 26.1.10909125** (r26b); point
+`ANDROID_NDK_HOME` at it. Output:
+`app/build/outputs/apk/debug/app-debug.apk`.
 
-Skipped on Android v1:
-- `libcdio` (ISO 9660 parsing — Android takes pre-extracted AFS via SAF)
-- `ffmpeg` (ADX audio — game is silent on Android v1)
-- `tf-psa-crypto` (only used in `CHECKSUM` mode, disabled here)
+- Override ABI / API floor with `ANDROID_ABI=` / `ANDROID_API=` env vars
+  (third-party deps must be re-cross-compiled for the new ABI first).
+- Bake Discord Rich Presence with `DISCORD_APP_ID=<id>`.
+- `build.sh android` stages `lib3sx.so` + `libSDL3.so` + the FFmpeg `.so`
+  files + `libc++_shared.so` into `app/src/main/jniLibs/<abi>/` before
+  invoking Gradle. If you run `./gradlew assembleDebug` directly, you must
+  stage those yourself or the APK ships without native libs.
 
-## ROM provisioning (SAF flow)
+## Getting SF33RD.AFS onto the device
 
-On first launch the app checks for `<filesDir>/resources/SF33RD.AFS`. If
-missing, `ThreeSXActivity.onCreate` launches the system file picker
-(`ACTION_OPEN_DOCUMENT`) so the user can pick the AFS file from their
-device. Selected file is copied into internal storage, then the Activity
-recreates and SDL boots normally.
+The game expects `SF33RD.AFS` (extracted from **your own** PS2 disc —
+Capcom IP, never included in released APKs) at
+`<filesDir>/resources/SF33RD.AFS` inside the app sandbox. Two ways:
 
-v1 requires an **already-extracted AFS** (use the Windows / macOS / Linux
-build to extract from an ISO first, then transfer to the phone). Adding
-ISO 9660 parsing on Android = future work (would need a tiny pure-Java ISO
-reader since libcdio doesn't cross-compile cleanly).
+1. **`install-and-run.bat` (recommended)** — phone over USB with debugging
+   enabled. Installs the APK, pushes the AFS into the sandbox via
+   `adb` + `run-as`, stages shaders, and launches the game. Skips the
+   ~600 MB push when the file is already on the device with the right size.
+2. **Personal bundled build** — drop `SF33RD.AFS` at
+   `app/src/main/assets/SF33RD.AFS` *before* building. On first launch the
+   activity copies it from the APK into the sandbox. **Do not distribute
+   the resulting APK** — it contains Capcom-owned data.
+
+If the ROM is missing at launch, the app shows a toast and exits. An in-app
+file picker (SAF) so users can stage the AFS without a PC is on the roadmap.
+
+## regions.txt
+
+The community APK bundles `assets/regions.txt` pointing at the public
+matchmaking regions (the default/fork APK ships none). On first launch it's
+copied to `<filesDir>/regions.txt`, where the native region picker reads it.
+To point at your own servers, replace that file via `adb run-as` or rebuild
+with your own `assets/regions.txt` — see the root README's
+*Deploying with your own infrastructure* section.
+
+## Useful commands
+
+```bash
+adb logcat -s SDL:* 3SX:* DEBUG:* AndroidRuntime:*        # live logs
+adb shell "run-as cl.chambeadores.threesx ls -la files/resources"
+adb shell "run-as cl.chambeadores.threesx cat files/regions.txt"
+```

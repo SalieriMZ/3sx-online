@@ -94,8 +94,8 @@ Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps impro
 
 1. Download `3sx.apk` from the [Releases](https://github.com/SalieriMZ/3sx-online/releases) page.
 2. Sideload via `adb install 3sx.apk` (or any file manager — enable *Install unknown apps*).
-3. On first run the app prompts for `SF33RD.AFS` via the Android Storage Access Framework — point it at the file you produced from your PS2 disc. The shell copies it into the app's private data dir.
-4. Network panel reads `regions.txt` from the app's private `files/` dir. The repo's example file is bundled at first install; replace it through any file manager or rebuild with your own.
+3. Stage `SF33RD.AFS` (extracted from your own PS2 disc) into the app sandbox: connect the phone over USB with debugging enabled and run [`android-project/install-and-run.bat`](android-project/install-and-run.bat) from a PC — it installs the APK, pushes the AFS via `adb run-as`, and launches the game. There is no in-app file picker yet (it's on the roadmap), so a one-time PC-assisted install is required.
+4. The region list ships inside the APK (`assets/regions.txt`, copied to the app's private `files/` dir on first launch). To point at different servers, replace `files/regions.txt` via `adb run-as` or rebuild with your own list.
 
 ### PlayStation Vita
 

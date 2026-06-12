@@ -53,11 +53,16 @@ public class ThreeSXActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Stage bundled assets (regions.txt) into filesDir so the native side's
-        // prefpath probe finds them. Idempotent — only copies when missing.
+        // Stage bundled assets into filesDir so the native side's prefpath
+        // probe finds them. Idempotent — only copies when missing. The AFS
+        // copy only fires on personal builds that bundle the ROM in assets/
+        // (released APKs ship no Capcom data, so the open() just fails and
+        // the adb-staged path below takes over).
         copyAssetIfMissing("regions.txt", new File(getFilesDir(), "regions.txt"));
 
         File rom = new File(getFilesDir(), ROM_REL_PATH);
+        rom.getParentFile().mkdirs();
+        copyAssetIfMissing("SF33RD.AFS", rom);
         if (!rom.exists() || rom.length() == 0) {
             Log.e(TAG, "ROM missing or empty at " + rom.getAbsolutePath()
                     + " (size=" + (rom.exists() ? rom.length() : -1) + ")");
