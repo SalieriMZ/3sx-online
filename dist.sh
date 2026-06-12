@@ -55,6 +55,11 @@ mkdir -p "$STAGE"
 stage_regions() {
     if [ -n "${REGIONS_FILE:-}" ] && [ -f "$REGIONS_FILE" ]; then
         cp -v "$REGIONS_FILE" "$STAGE/regions.txt"
+    elif [ -n "${REGIONS_FILE:-}" ]; then
+        echo "WARN: REGIONS_FILE=$REGIONS_FILE does not exist — packaging without regions.txt" >&2
+    else
+        echo "NOTE: REGIONS_FILE not set — packaging without a baked regions.txt." >&2
+        echo "      Run 'bash setup-regions.sh' to generate one interactively." >&2
     fi
 }
 

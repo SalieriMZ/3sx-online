@@ -99,7 +99,7 @@ The file is looked up in this order (first match wins):
 | Android | `/data/data/cl.chambeadores.threesx/files/regions.txt` | (same — copied from `assets/regions.txt` on first launch) | APK `assets/regions.txt` |
 | Vita | `ux0:data/CrowdedStreet/3SX/regions.txt` | (same) | `app0:/resources/regions.txt` |
 
-A starter template is at [`regions.example.txt`](regions.example.txt). Either ship your own list with the build (per the build steps below) or drop one alongside the installed binary.
+A starter template is at [`regions.example.txt`](regions.example.txt), or run `bash setup-regions.sh` for an interactive prompt that asks for your server IPs and writes the file for you. Either ship your own list with the build (per the build steps below) or drop one alongside the installed binary.
 
 You can confirm which path the game actually loaded by running `3sx --version` and then checking `netplay.log` in the prefs dir — a line like `[REGION] loaded 2 region(s) from basepath=...` shows the resolution path.
 
@@ -115,6 +115,9 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 | Launcher region list (override) | `FISTBUMP_REGIONS="code\|label\|host\|port;..."` env var | Overrides the launcher's default region dropdown without touching `regions.txt` on the game side. |
 | Build version stamp | `-DBUILD_VERSION=1.7.27` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
+| Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
+| Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
+| Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
 For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.27` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
