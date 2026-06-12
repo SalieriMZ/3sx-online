@@ -16,7 +16,9 @@
 #include <string.h>
 #include <time.h>
 
-#define FISTBUMP_CLIENT_VERSION "1.3.0"
+// 1.3.1 (release 1.7.28): platform tag on auth, full-length PROFILE
+// username, ROOM STATE scores token, per-game RESULT reports.
+#define FISTBUMP_CLIENT_VERSION "1.3.1"
 
 static FistbumpState state = FISTBUMP_IDLE;
 static FistbumpConnectState connect_state = FISTBUMP_CONN_IDLE;
@@ -41,7 +43,10 @@ static Fistbump_Profile profile;
 static MatchResult match_result;
 static Fistbump_Room current_room;
 static bool in_room = false;
-static bool result_sent = false;
+// Last RESULT score pair actually sent. In-game rematches keep the same
+// match_id and re-report cumulative PL_Wins after every game, so the guard
+// is "did the score change" rather than "did we ever send".
+static int result_sent_wins[2] = { -1, -1 };
 static char last_error[256] = { 0 };
 
 static void SaveToken(const JWT* jwt) {
@@ -242,7 +247,8 @@ void Fistbump_Login() {
     if (LoadToken(&refresh_token)) {
         state = FISTBUMP_LOGGING_IN;
         char buf[1100];
-        SDL_snprintf(buf, sizeof(buf), "REFRESH %s %s\n", refresh_token.token, FISTBUMP_CLIENT_VERSION);
+        SDL_snprintf(buf, sizeof(buf), "REFRESH %s %s %s\n", refresh_token.token, FISTBUMP_CLIENT_VERSION,
+                     BUILD_PLATFORM_STR);
         NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
     } else {
         // No saved token — wait for the UI to REGISTER or LOGIN.
@@ -255,7 +261,8 @@ void Fistbump_Register(const char* username, const char* password) {
         return;
     }
     char buf[256];
-    SDL_snprintf(buf, sizeof(buf), "REGISTER %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION);
+    SDL_snprintf(buf, sizeof(buf), "REGISTER %s %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION,
+                 BUILD_PLATFORM_STR);
     NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
     last_error[0] = '\0';
     state = FISTBUMP_LOGGING_IN;
@@ -267,7 +274,8 @@ void Fistbump_LoginDirect(const char* username, const char* password) {
         return;
     }
     char buf[256];
-    SDL_snprintf(buf, sizeof(buf), "LOGIN %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION);
+    SDL_snprintf(buf, sizeof(buf), "LOGIN %s %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION,
+                 BUILD_PLATFORM_STR);
     NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
     last_error[0] = '\0';
     state = FISTBUMP_LOGGING_IN;
@@ -415,13 +423,16 @@ void Fistbump_DeclineMatch() {
     NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
     // Server's CANCEL only goes to the OTHER peer; reset locally too.
     SDL_zero(match_result);
-    result_sent = false;
+    result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_IDLE;
 }
 
 void Fistbump_SendResult(int my_wins, int opp_wins) {
-    if (tcp_sock == NULL || match_result.match_id[0] == '\0' || result_sent) {
+    if (tcp_sock == NULL || match_result.match_id[0] == '\0') {
         return;
+    }
+    if (my_wins == result_sent_wins[0] && opp_wins == result_sent_wins[1]) {
+        return; // same score already reported (result screen re-fires per frame)
     }
     char buf[128];
     SDL_snprintf(buf, sizeof(buf), "RESULT %s %d %d\n",
@@ -429,7 +440,8 @@ void Fistbump_SendResult(int my_wins, int opp_wins) {
     NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
     SDL_Log("Fistbump: sent RESULT match=%s wins=%d/%d", match_result.match_id, my_wins, opp_wins);
     Netplay_Log("MATCH", "result id=%s my=%d opp=%d", match_result.match_id, my_wins, opp_wins);
-    result_sent = true;
+    result_sent_wins[0] = my_wins;
+    result_sent_wins[1] = opp_wins;
 }
 
 float Fistbump_PingHost(const char* host, int tcp_port, float timeout_sec) {
@@ -598,7 +610,10 @@ void Fistbump_HandleTOKEN(const char* line) {
 }
 
 void Fistbump_HandlePROFILE(const char* line) {
-    SDL_sscanf(line, "PROFILE %7s", profile.username);
+    // Full username (server sends it untruncated as of 1.7.28). The old %7s
+    // limit broke room host/slot detection for 8+ char names: the overlay
+    // compares profile.username against the full names in ROOM STATE.
+    SDL_sscanf(line, "PROFILE %63s", profile.username);
     SDL_Log("Fistbump: Logged in as %s\n", profile.username);
     Netplay_Log("AUTH", "logged in user=%s", profile.username);
 
@@ -617,7 +632,7 @@ void Fistbump_HandleMATCH(const char* line) {
     SDL_Log("Fistbump: matched with %s\n", match_result.opponent_name);
     Netplay_Log("QUEUE", "matched id=%s opp=%s", match_result.match_id, match_result.opponent_name);
 
-    result_sent = false;
+    result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_MATCHED;
 }
 
@@ -720,6 +735,10 @@ void Fistbump_HandleSTART(const char* line) {
                 match_result.use_relay ? 1 : 0,
                 match_result.ip[0] ? match_result.ip : "(none)",
                 match_result.remote_port);
+    // Every match path (queue, room, rematch) funnels through START. Room
+    // rematches skip MATCH entirely, so re-arm result reporting here or the
+    // second match in a room never sends its RESULT (ranked desync).
+    result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_GAME_START;
 }
 
@@ -833,6 +852,7 @@ void Fistbump_HandleROOM(const char* line) {
         // Parse k=v tokens from rest. Format:
         //   host=<user> best_of=3 timer=99 damage=1 slot_a=<user> slot_b=- match=- members=<user>,<user>
         char host[16] = "-", sa[16] = "-", sb[16] = "-", match_id[40] = "-", members[256] = "-";
+        char scores[256] = "-";
         int bo = 3, tm = 99, dmg = 1;
         // Walk space-separated tokens, parse key=value.
         const char* p = rest;
@@ -861,6 +881,7 @@ void Fistbump_HandleROOM(const char* line) {
             else if (MATCH_KEY("slot_b"))  SDL_strlcpy(sb, tmpv, sizeof(sb));
             else if (MATCH_KEY("match"))   SDL_strlcpy(match_id, tmpv, sizeof(match_id));
             else if (MATCH_KEY("members")) SDL_strlcpy(members, tmpv, sizeof(members));
+            else if (MATCH_KEY("scores"))  SDL_strlcpy(scores, tmpv, sizeof(scores));
             #undef MATCH_KEY
         }
         SDL_strlcpy(current_room.host_name, host, sizeof(current_room.host_name));
@@ -884,6 +905,28 @@ void Fistbump_HandleROOM(const char* line) {
             if (*mp == ',') mp++;
         }
         current_room.peer_present = current_room.members >= 2;
+        // Cumulative wins: "user:wins,user:wins" — map onto member indices.
+        SDL_zeroa(current_room.member_wins);
+        const char* sp = scores;
+        while (*sp && *sp != '-') {
+            char uname_buf[16] = { 0 };
+            int ui = 0;
+            while (*sp && *sp != ':' && ui + 1 < (int)sizeof(uname_buf)) {
+                uname_buf[ui++] = *sp++;
+            }
+            while (*sp && *sp != ':') sp++;
+            if (*sp != ':') break;
+            sp++;
+            int wins = SDL_atoi(sp);
+            while (*sp && *sp != ',') sp++;
+            if (*sp == ',') sp++;
+            for (int mi = 0; mi < current_room.members; mi++) {
+                if (SDL_strcmp(current_room.member_names[mi], uname_buf) == 0) {
+                    current_room.member_wins[mi] = wins;
+                    break;
+                }
+            }
+        }
         // Local-user flags vs profile.username.
         const char* me = profile.username;
         current_room.is_host   = (me[0] && SDL_strcmp(host, me) == 0);

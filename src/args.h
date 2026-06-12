@@ -1,6 +1,23 @@
 #ifndef ARGS_H
 #define ARGS_H
 
+// Compile-time platform tag, shared by --version output and the netplay
+// protocol (sent as a trailing field on auth so the leaderboard can show
+// where each player fights).
+#if defined(__ANDROID__)
+#define BUILD_PLATFORM_STR "android"
+#elif defined(__vita__)
+#define BUILD_PLATFORM_STR "vita"
+#elif defined(_WIN32)
+#define BUILD_PLATFORM_STR "windows"
+#elif defined(__APPLE__)
+#define BUILD_PLATFORM_STR "macos"
+#elif defined(__linux__)
+#define BUILD_PLATFORM_STR "linux"
+#else
+#define BUILD_PLATFORM_STR "unknown"
+#endif
+
 #if NETPLAY_ENABLED
 typedef struct NetplayArgs {
     int p2p_local_player;

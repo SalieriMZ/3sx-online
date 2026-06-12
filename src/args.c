@@ -14,19 +14,7 @@
 #define BUILD_GIT_SHA "unknown"
 #endif
 
-#if defined(__ANDROID__)
-#define BUILD_PLATFORM_STR "android"
-#elif defined(__vita__)
-#define BUILD_PLATFORM_STR "vita"
-#elif defined(_WIN32)
-#define BUILD_PLATFORM_STR "windows"
-#elif defined(__APPLE__)
-#define BUILD_PLATFORM_STR "macos"
-#elif defined(__linux__)
-#define BUILD_PLATFORM_STR "linux"
-#else
-#define BUILD_PLATFORM_STR "unknown"
-#endif
+// BUILD_PLATFORM_STR lives in args.h (shared with the netplay protocol).
 
 #ifdef DISCORD_APP_ID
 #define BUILD_DISCORD_STR DISCORD_APP_ID

@@ -71,6 +71,24 @@ void NetplayPanel_Render(void) {
                     }
                     ImGui_Text("Members: %d/%d", rm->members, FISTBUMP_ROOM_MAX_MEMBERS);
 
+                    // Multi-fight scoreboard: cumulative wins for the lifetime
+                    // of the room. Slotted (about-to-fight) members in gold.
+                    ImGui_Separator();
+                    ImGui_TextDisabled("Scoreboard");
+                    for (int mi = 0; mi < rm->members; mi++) {
+                        const char* mn = rm->member_names[mi];
+                        const bool in_slot = SDL_strcmp(mn, rm->slot_a_name) == 0
+                                          || SDL_strcmp(mn, rm->slot_b_name) == 0;
+                        if (in_slot) {
+                            ImGui_TextColored((ImVec4){1.0f, 0.85f, 0.3f, 1.0f},
+                                               "%s — %d win%s", mn, rm->member_wins[mi],
+                                               rm->member_wins[mi] == 1 ? "" : "s");
+                        } else {
+                            ImGui_Text("%s — %d win%s", mn, rm->member_wins[mi],
+                                       rm->member_wins[mi] == 1 ? "" : "s");
+                        }
+                    }
+
                     ImGui_Separator();
                     ImGui_TextDisabled("Match slots");
                     // Slot A

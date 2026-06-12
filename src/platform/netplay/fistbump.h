@@ -109,6 +109,7 @@ typedef struct {
     char slot_a_name[16];                                // "-" if empty
     char slot_b_name[16];
     char member_names[FISTBUMP_ROOM_MAX_MEMBERS][16];    // usernames
+    int  member_wins[FISTBUMP_ROOM_MAX_MEMBERS];         // cumulative wins in this room (parallel to member_names)
     int  members;                                         // count of valid member_names
     int  settings_best_of;                                // rounds-to-win
     int  settings_timer;                                  // round timer seconds

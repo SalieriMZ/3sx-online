@@ -7,6 +7,7 @@
 #include "platform/netplay/game_state.h"
 #include "platform/netplay/sdl_net_adapter.h"
 #include "platform/netplay/relay_adapter.h"
+#include "platform/netplay/regions.h"
 #include "port/paths.h"
 #include "sf33rd/Source/Game/effect/effect.h"
 #include "sf33rd/Source/Game/engine/grade.h"
@@ -16,6 +17,8 @@
 #include "sf33rd/Source/Game/io/gd3rd.h"
 #include "sf33rd/Source/Game/io/pulpul.h"
 #include "sf33rd/Source/Game/menu/menu.h"
+#include "sf33rd/Source/Game/sound/se.h"
+#include "sf33rd/Source/Game/rendering/mmtmcnt.h"
 #include "sf33rd/Source/Game/rendering/color3rd.h"
 #include "sf33rd/Source/Game/rendering/dc_ghost.h"
 #include "sf33rd/Source/Game/rendering/mtrans.h"
@@ -85,6 +88,11 @@ static u16 input_history[2][INPUT_HISTORY_MAX] = { 0 };
 static float frames_behind = 0;
 static int frame_skip_timer = 0;
 static int transition_ready_frames = 0;
+
+// Post-match fast-return to the Network menu. Armed in EXITING only when a
+// real match ran (gekko session existed); consumed by the dedicated
+// transition at the end of EXITING. Voluntary menu EXIT keeps the title path.
+static bool netplay_return_to_network = false;
 
 static int stats_update_timer = 0;
 static int frame_max_rollback = 0;
@@ -650,6 +658,21 @@ static void run_netplay() {
     }
 
     extern bool afs_io_in_progress;
+
+    // Service the load queue outside the stepped sim whenever a load is
+    // pending. The queue normally advances inside Game_Task frames, but in
+    // netplay the sim stalls in two deadlock-prone ways: (a) we freeze on
+    // fistbump_peer_loading below and starve our own loader, or (b) the PEER
+    // froze on OUR loading signal, stops sending inputs, gekko starves, and
+    // our in-sim loader never finishes — so our LOADING 0 never goes out and
+    // the peer stays frozen forever. Pumping here breaks both cycles: the
+    // load always completes in real time regardless of sim progress. Loaded
+    // data is AFS/texture buffers, not sim state, so this cannot desync.
+    extern void Check_LDREQ_Queue(void);
+    if (afs_io_in_progress) {
+        Check_LDREQ_Queue();
+    }
+
     Fistbump_TickLoadingSignal(afs_io_in_progress);
 
     if (fistbump_peer_loading) {
@@ -726,6 +749,9 @@ void Netplay_SetMatchmakingParams(const char* server_ip, int server_port) {
 }
 
 void Netplay_BeginMatchmaking() {
+    // Refresh region latencies every time the Network screen is entered so
+    // the picker auto-selects the lowest-ping server with current data.
+    Regions_PingAllAsync();
     if (matchmaking_server_ip == NULL) {
         return;
     }
@@ -761,8 +787,10 @@ void Netplay_TickMatchmaking() {
         session_state = NETPLAY_SESSION_TRANSITIONING;
         log_transition_state("GAME_START/post-setup");
     } else if (mm == FISTBUMP_ERROR) {
-        matchmaking_pending = false;
-        Soft_Reset_Sub();
+        // Connection failed/refused. Stay in the Network menu — the login
+        // overlay surfaces the error and the region picker can retry
+        // (Regions_Select restarts fistbump). Bouncing through Soft_Reset_Sub
+        // ejected the player to the main screen over a transient failure.
     }
 }
 
@@ -814,6 +842,14 @@ void Netplay_Run() {
         Fistbump_TickLoadingSignal(afs_io_in_progress);
 
         extern bool fistbump_peer_loading;
+        // Same anti-starvation pump as run_netplay (see comment there).
+        {
+            extern bool afs_io_in_progress;
+            extern void Check_LDREQ_Queue(void);
+            if (afs_io_in_progress) {
+                Check_LDREQ_Queue();
+            }
+        }
         if (fistbump_peer_loading) {
             update_network_stats();
             break;
@@ -841,6 +877,9 @@ void Netplay_Run() {
         break;
 
     case NETPLAY_SESSION_EXITING:
+        if (session != NULL) {
+            netplay_return_to_network = true;
+        }
         // Destroy gekko + adapter BEFORE Fistbump_Reset tears down the shared UDP socket.
         if (session != NULL) {
             gekko_destroy(&session);
@@ -890,6 +929,49 @@ void Netplay_Run() {
         extern bool fistbump_peer_cancelled;
         fistbump_peer_loading = false;
         fistbump_peer_cancelled = false;
+
+        // Post-match return-to-Network: a dedicated transition that resets
+        // exactly what the boot path (title -> mode select) would rebuild,
+        // then lands the menu task on the Network routine. The pieces the
+        // earlier shortcut missed — and which produced the effect-queue abort
+        // and the mis-scaled viewport — are effect_work_init() and the MENU
+        // texture set (Soft_Reset_Sub prepares the TITLE set, list 6; menus
+        // need list 2, exactly what Game0_2 stages before entering menus).
+        // Only armed when a real match ran (gekko session existed); a
+        // voluntary EXIT from the Network menu keeps the classic title path.
+        if (netplay_return_to_network) {
+            netplay_return_to_network = false;
+
+            // Cancel the cold-boot chain Soft_Reset_Sub armed and revive the
+            // menu task (TASK_GAME/TASK_DEBUG were re-readied by the reset,
+            // TASK_ENTRY never died).
+            cpExitTask(TASK_INIT);
+            cpReadyTask(TASK_MENU, Menu_Task);
+            Forbid_Reset = 0;
+
+            // What the title->menu path rebuilds (Game0_2 cases 3-5).
+            Purge_mmtm_area(2);
+            Make_texcash_of_list(2);
+            effect_work_init();
+            System_all_clear_Level_B();
+
+            // Land on After_Title -> Netplay_Menu (same state set as
+            // Back_to_Mode_Select, with the Network routine selected).
+            G_No[0] = 2;
+            G_No[1] = 12;
+            G_No[2] = 0;
+            G_No[3] = 0;
+            E_No[0] = 1;
+            E_No[1] = 2;
+            E_No[2] = 2;
+            E_No[3] = 0;
+            Menu_Init(&task[TASK_MENU]);
+            for (int rix = 0; rix < 4; rix++) {
+                task[TASK_MENU].r_no[rix] = 0;
+            }
+            task[TASK_MENU].r_no[1] = 6; // After_Title -> Netplay_Menu
+            BGM_Request_Code_Check(0x41);
+        }
 
         session_state = NETPLAY_SESSION_IDLE;
         // Suppress title-screen attract-mode demo for the rest of the process —

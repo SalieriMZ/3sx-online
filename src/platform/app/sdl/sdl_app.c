@@ -252,15 +252,22 @@ static int full_init() {
     DiscordRPC_SetEnabled(false);
 #endif
 
-#if defined(__ANDROID__) || defined(__vita__)
-    // Mobile/handheld: read persisted region + force-relay (no launcher CLI).
+    // Read persisted region + netplay prefs on every platform. The launcher's
+    // explicit --matchmaking-ip (CLI) wins; without it (flat zip, exe double-
+    // clicked directly) the persisted/bundled region list drives the first
+    // connection, so entering Network doesn't dial a built-in default and
+    // bounce the player to the main screen on the refused connect.
     Regions_LoadPersistedSelection();
+#if defined(__ANDROID__) || defined(__vita__)
+    // Mobile/handheld: force_relay default + persisted prefs (no launcher CLI).
     Args_LoadNetplayPrefs();
-    const Region* persisted = Regions_Get(Regions_GetSelectedIdx());
-    if (persisted != NULL) {
-        Netplay_SetMatchmakingParams(persisted->ip, persisted->port);
-    }
 #endif
+    if (get_args()->netplay.matchmaking_ip == NULL) {
+        const Region* persisted = Regions_Get(Regions_GetSelectedIdx());
+        if (persisted != NULL) {
+            Netplay_SetMatchmakingParams(persisted->ip, persisted->port);
+        }
+    }
 #ifdef __vita__
     VitaLogin_Init();
 #endif

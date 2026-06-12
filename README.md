@@ -51,11 +51,10 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 
 This is an early public release, play-tested by a small community. The core loop — log in, find a match, play with rollback — is solid across PC, Android, and Vita, but **some flows are still rough and some features are unfinished**. Things you may run into:
 
-- **No in-room rematch yet** — after an online match ends you return to the menu and re-queue (or restart from the room lobby). A proper rematch flow is on the roadmap.
-- **REMATCH on the same connection has bugs** — re-fighting the same opponent without tearing the session down can desync result reporting, which means **some ranked results don't count the way they should**. Until that's fixed, take ranked standings with a grain of salt.
+- **Room scoreboard under-counts in-game rematch series** — when both players pick REMATCH on the result screen and keep playing, the room scoreboard currently credits only the first game of the series. Win-by-win crediting is being worked on; re-starting matches from the lobby counts every match correctly.
 - **Stat tracker / ELO / ranks are early** — the [community leaderboard](https://sf3-leaderboard.chambeadores.cl/) is live so you can see who's playing, but the rating system is young: expect inconsistencies, and possibly a reset before rankings become meaningful.
 - **Queue decline / timeout UX is incomplete** — declining a match or letting the accept dialog time out can leave the UI in an odd state; backing out to the Network menu recovers it.
-- **Custom rooms are an MVP** — slots, settings, and chat work, but multi-fight lobbies are not finished.
+- **Custom rooms are an MVP** — slots, settings, chat, and a per-room scoreboard work, but SF6-style multi-fight lobbies (host picks the next two fighters) are not finished.
 - **Android TV (32-bit `armeabi-v7a`)** installs have been flaky and are untested on the current tree.
 - Occasional character-select slowdown on Vita with slow storage (largely fixed, not 100%).
 
@@ -65,15 +64,14 @@ If you hit something not listed here, report it on [Discord](https://discord.gg/
 
 Rough priority order — no dates promised:
 
-1. **Post-match flow fixes** — fix the result-reporting bugs when rematching on the same connection (so ranked counts reliably), make *EXIT* after a match drop you straight back to the main screen, and add a proper in-room rematch.
-2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N, cumulative score.
+1. **Per-game rematch crediting** — make every game of an in-game REMATCH series count on the room scoreboard and ranked ladder (today only the first game of a series is credited).
+2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N on top of the scoreboard that shipped in 1.7.28.
 3. **Direct versus by IP** — play a friend with no matchmaking server at all. The netcode already supports it (`--p2p-local-player` / `--p2p-remote-ip`); it needs an in-game UI.
-4. **Leaderboard & stat tracker** — show which **regions** and **platforms** (PC / Android / Vita) each player fights on. Needs some client-side telemetry additions, so it lands together with a client update.
-5. **Replays + spectator mode** — record/watch matches; live spectating from a room.
-6. **PlayStation Vita release builds** — Vita is fully playable from source today; pre-built VPKs return in a follow-up release.
-7. **Android quality-of-life** — touch controls, lifecycle pause/resume polish, in-app updates.
-8. **In-game UI consolidation** — move flows into native game menus so we depend less on the ImGui overlay and remove the redundancy between the two.
-9. **If the project gains traction** — validated character/match stats, hardened netplay protocol, and anti-cheat measures so ranked stays trustworthy.
+4. **Replays + spectator mode** — record/watch matches; live spectating from a room.
+5. **PlayStation Vita release builds** — Vita is fully playable from source today; pre-built VPKs return in a follow-up release.
+6. **Android quality-of-life** — touch controls, lifecycle pause/resume polish, in-app updates.
+7. **In-game UI consolidation** — move flows into native game menus so we depend less on the ImGui overlay and remove the redundancy between the two.
+8. **If the project gains traction** — validated character/match stats, hardened netplay protocol, and anti-cheat measures so ranked stays trustworthy.
 
 Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps improving the offline game; we port those changes manually, so they may take longer to arrive in this fork.
 
@@ -146,13 +144,13 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 | Discord Rich Presence app | `-DDISCORD_APP_ID=<id>` at cmake configure time | Register an app at <https://discord.com/developers/applications>. Omit the flag for an RPC-free build (presence is a no-op stub). |
 | Launcher update URL | `FISTBUMP_UPDATE_BASE_URL` env var when launching the launcher | Defaults to `http://<first-region-host>:20000`. Point at your stats/HTTP endpoint to enable auto-updates. Failures are silent — the launcher always lets the user click *Play*. |
 | Launcher region list (override) | `FISTBUMP_REGIONS="code\|label\|host\|port;..."` env var | Overrides the launcher's default region dropdown without touching `regions.txt` on the game side. |
-| Build version stamp | `-DBUILD_VERSION=1.7.27` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
+| Build version stamp | `-DBUILD_VERSION=1.7.28` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
 | Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
 | Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
 | Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
-For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.27` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
+For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.28` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
 ---
 
@@ -228,10 +226,10 @@ This prints version + git SHA + platform + build date + Discord App ID + whether
 To package a ready-to-share zip with the DLL closure pre-pruned, run:
 
 ```bash
-DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.27
+DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.28
 ```
 
-Output is at `dist/3sx-1.7.27-pc.zip`.
+Output is at `dist/3sx-1.7.28-pc.zip`.
 
 ### Android
 
