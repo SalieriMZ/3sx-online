@@ -3,12 +3,13 @@
 [![us-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/us-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
 [![sa-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/sa-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
 [![fistbump](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/all.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
+[![Discord](https://img.shields.io/badge/Discord-3SX%20Online-5865F2?logo=discord&logoColor=white)](https://discord.gg/aume4RqnnP)
 
 A **community-built online layer** for *Street Fighter III: 3rd Strike* — rollback netcode + cross-region matchmaking + custom rooms + ELO, on top of the [crowded-street/3sx](https://github.com/crowded-street/3sx) native decompilation.
 
 Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Android** (phones + tablets + Android TV), and **PlayStation Vita**. PC ↔ Vita ↔ Android cross-play confirmed working on real hardware.
 
-> Upstream `crowded-street/3sx` focuses on the offline single-player experience. This fork is where the online + multi-platform work lives. We ship engine code only — Capcom-owned assets remain Capcom's, you bring your own dump.
+> **Independent community project.** We are not affiliated with [crowded-street](https://github.com/crowded-street/3sx) (the upstream decompilation) or with Capcom. Upstream focuses on the offline single-player experience; this fork is where the online + multi-platform work lives. Upstream improvements are ported here manually, so they can take a while to land in this fork. We ship engine code only — Capcom-owned assets remain Capcom's, you bring your own dump.
 
 ---
 
@@ -26,7 +27,7 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 
 ## Community
 
-- **Discord** — the *Crowded Street* server is where playtesting, bug reports, and feature design happen. [![Join the Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/wqs6BqYr8C)](https://discord.gg/wqs6BqYr8C)
+- **Discord** — the **3SX Online** server is where matchmaking happens, and where playtesting, bug reports, and announcements live: [discord.gg/aume4RqnnP](https://discord.gg/aume4RqnnP)
 - **Issues** — file bugs / feature requests at [GitHub Issues](https://github.com/SalieriMZ/3sx-online/issues).
 - **Reference matchmaking server** — [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server). Run your own or talk to us about joining a hosted instance.
 
@@ -43,6 +44,33 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 - TCP fast-disconnect: ~100 ms tear-down when a peer crashes (vs gekko's ~30 s UDP timeout).
 - Hold-last-frame on any sim stall — no black flicker during rollback storms or peer AFS bursts.
 - Chunked AFS sync I/O on slow storage with TCP keep-alive pump (Vita flash specifically).
+
+---
+
+## Project status — read before playing
+
+This is an early public release, play-tested by a small community. The core loop — log in, find a match, play with rollback — is solid across PC, Android, and Vita, but **some flows are still rough and some features are unfinished**. Things you may run into:
+
+- **No in-room rematch yet** — after an online match ends you return to the menu and re-queue (or restart from the room lobby). A proper rematch flow is on the roadmap.
+- **Queue decline / timeout UX is incomplete** — declining a match or letting the accept dialog time out can leave the UI in an odd state; backing out to the Network menu recovers it.
+- **Custom rooms are an MVP** — slots, settings, and chat work, but multi-fight lobbies are not finished.
+- **Android TV (32-bit `armeabi-v7a`)** installs have been flaky and are untested on the current tree.
+- Occasional character-select slowdown on Vita with slow storage (largely fixed, not 100%).
+
+If you hit something not listed here, report it on [Discord](https://discord.gg/aume4RqnnP) or [GitHub Issues](https://github.com/SalieriMZ/3sx-online/issues) — include the output of `3sx --version` and your `netplay.log` if you can.
+
+## Roadmap
+
+Rough priority order — no dates promised:
+
+1. **In-room rematch** — play the same opponent again without leaving the room.
+2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N, cumulative score.
+3. **Direct versus by IP** — play a friend with no matchmaking server at all. The netcode already supports it (`--p2p-local-player` / `--p2p-remote-ip`); it needs an in-game UI.
+4. **Spectator mode** — watch live matches from a room.
+5. **PlayStation Vita release builds** — Vita is fully playable from source today; pre-built VPKs return in a follow-up release.
+6. **Android quality-of-life** — touch controls, lifecycle pause/resume polish, in-app updates.
+
+Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps improving the offline game; we port those changes manually, so they may take longer to arrive in this fork.
 
 ---
 
