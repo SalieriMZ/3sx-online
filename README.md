@@ -383,4 +383,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching strategy, style notes, te
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+**AGPL-3.0**, inherited from the upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) decompilation. See [`LICENSE`](LICENSE). In short: you can use, modify, and redistribute freely, but derivative works — including hosted/networked forks — must publish their source under the same license.

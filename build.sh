@@ -92,8 +92,8 @@ case "$TARGET" in
         fi
         WIN_PATH="$(pwd -W 2>/dev/null || pwd)"
         docker run --rm -v "${WIN_PATH}:/workspace" -w /workspace vitasdk/vitasdk:latest sh -euxc "
-            apk add --no-cache bash cmake ninja python3 >/dev/null
-            if [ ! -d third_party/GekkoNet/build-vita ]; then bash build-deps-vita.sh; fi
+            apk add --no-cache bash cmake ninja python3 make >/dev/null
+            bash build-deps-vita.sh
             if [ ! -d third_party/ffmpeg/build-vita-arm ]; then bash build-ffmpeg-vita.sh; fi
             cmake -B build-vita \
                 -DCMAKE_TOOLCHAIN_FILE=\$VITASDK/share/vita.toolchain.cmake \

@@ -20,7 +20,7 @@ jobs:
           submodules: true
 
       - name: Install host tools
-        run: apk add --no-cache bash cmake ninja python3
+        run: apk add --no-cache bash cmake ninja python3 make
 
       - name: Cache cross-compiled deps
         uses: actions/cache@v4

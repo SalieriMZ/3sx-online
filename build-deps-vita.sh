@@ -155,6 +155,44 @@ else
 fi
 
 # -----------------------------
+# vitaGL + vitaShaRK with HAVE_VITA3K_SUPPORT=1
+# The vitasdk prebuilt vitaGL calls sceGxmVshInitialize, which Vita3K rejects.
+# Building from source with HAVE_VITA3K_SUPPORT=1 swaps in the regular
+# sceGxmInitialize path so the same VPK boots on hardware AND Vita3K.
+# CMakeLists links third_party/vitaGL-vita3k/lib/libvitaGL.a directly.
+# -----------------------------
+
+VITAGL_OUT="$THIRD_PARTY/vitaGL-vita3k"
+VITAGL_SRC="$THIRD_PARTY/vitaGL-src"
+VITASHARK_SRC="$THIRD_PARTY/vitaShaRK-src"
+
+if [ -f "$VITAGL_OUT/lib/libvitaGL.a" ] && [ -f "$VITAGL_OUT/lib/libvitashark.a" ]; then
+    echo "vitaGL-vita3k already built at $VITAGL_OUT"
+else
+    echo "Building vitaShaRK..."
+    if [ ! -d "$VITASHARK_SRC" ]; then
+        git clone --depth 1 https://github.com/Rinnegatamante/vitaShaRK.git "$VITASHARK_SRC"
+    fi
+    make -C "$VITASHARK_SRC" -j"$BUILD_JOBS"
+
+    echo "Building vitaGL (HAVE_VITA3K_SUPPORT=1)..."
+    if [ ! -d "$VITAGL_SRC" ]; then
+        git clone --depth 1 https://github.com/Rinnegatamante/vitaGL.git "$VITAGL_SRC"
+    fi
+    make -C "$VITAGL_SRC" HAVE_VITA3K_SUPPORT=1 -j"$BUILD_JOBS"
+
+    mkdir -p "$VITAGL_OUT/lib" "$VITAGL_OUT/include"
+    find "$VITAGL_SRC" -name 'libvitaGL.a' -exec cp {} "$VITAGL_OUT/lib/libvitaGL.a" \;
+    find "$VITASHARK_SRC" -name 'libvitashark.a' -exec cp {} "$VITAGL_OUT/lib/libvitashark.a" \;
+    find "$VITAGL_SRC" -maxdepth 2 -name 'vitaGL.h' -exec cp {} "$VITAGL_OUT/include/vitaGL.h" \;
+    find "$VITASHARK_SRC" -maxdepth 2 -name 'vitashark.h' -exec cp {} "$VITAGL_OUT/include/vitashark.h" \;
+
+    [ -f "$VITAGL_OUT/lib/libvitaGL.a" ] || { echo "vitaGL build produced no libvitaGL.a" >&2; exit 1; }
+    [ -f "$VITAGL_OUT/lib/libvitashark.a" ] || { echo "vitaShaRK build produced no libvitashark.a" >&2; exit 1; }
+    echo "vitaGL-vita3k installed to $VITAGL_OUT"
+fi
+
+# -----------------------------
 # minizip-ng (Vita)
 # vitasdk ships old minizip with bz2/lzma/ppmd/zstd/openssl deps wired in,
 # which drag in symbols we don't need (and ppmd isn't available). Build the
