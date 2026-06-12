@@ -65,8 +65,11 @@ stage_regions() {
 
 case "$TARGET" in
     pc)
-        # 1. exe + shaders.
+        # 1. exe + shaders. The VERSION marker is what the launcher compares
+        #    against GitHub's latest release tag — without it a flat install
+        #    can't tell what version it is and re-prompts for updates forever.
         cp -v "$HERE/build/application/bin/3sx.exe" "$STAGE/3sx.exe"
+        printf '%s' "$VERSION" > "$STAGE/VERSION"
         if [ -d "$HERE/build/application/bin/shaders" ]; then
             cp -rv "$HERE/build/application/bin/shaders" "$STAGE/shaders"
         fi
