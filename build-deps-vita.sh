@@ -174,6 +174,9 @@ else
         git clone --depth 1 https://github.com/Rinnegatamante/vitaShaRK.git "$VITASHARK_SRC"
     fi
     make -C "$VITASHARK_SRC" -j"$BUILD_JOBS"
+    # Install into the SDK sysroot so vitaGL picks up the fresh vitashark.h
+    # (the vitasdk prebuilt header predates shark_init_simple).
+    make -C "$VITASHARK_SRC" install
 
     echo "Building vitaGL (HAVE_VITA3K_SUPPORT=1)..."
     if [ ! -d "$VITAGL_SRC" ]; then
