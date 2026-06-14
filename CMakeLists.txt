@@ -143,7 +143,7 @@ endif()
 # overridden via -DBUILD_VERSION=...; otherwise we use the project version.
 # BUILD_GIT_SHA is auto-detected from the working tree when not provided.
 if(NOT DEFINED BUILD_VERSION)
-    set(BUILD_VERSION "1.7.28")
+    set(BUILD_VERSION "1.7.29")
 endif()
 if(NOT DEFINED BUILD_GIT_SHA)
     execute_process(

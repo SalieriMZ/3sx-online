@@ -65,7 +65,7 @@ If you hit something not listed here, report it on [Discord](https://discord.gg/
 Rough priority order — no dates promised:
 
 1. **Per-game rematch crediting** — make every game of an in-game REMATCH series count on the room scoreboard and ranked ladder (today only the first game of a series is credited).
-2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N on top of the scoreboard that shipped in 1.7.28.
+2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N on top of the scoreboard that shipped in 1.7.29.
 3. **Direct versus by IP** — play a friend with no matchmaking server at all. The netcode already supports it (`--p2p-local-player` / `--p2p-remote-ip`); it needs an in-game UI.
 4. **Replays + spectator mode** — record/watch matches; live spectating from a room.
 5. **PlayStation Vita release builds** — Vita is fully playable from source today; pre-built VPKs return in a follow-up release.
@@ -86,7 +86,7 @@ Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps impro
 1. Download `3SX-x.y.z.zip` from the [Releases](https://github.com/SalieriMZ/3sx-online/releases) page.
 2. Extract anywhere, double-click `3SX.exe`. The launcher walks you through ISO → AFS conversion on first run.
 3. Drop a `regions.txt` next to `3sx.exe` so the region picker has somewhere to point — see [Configuring regions](#configuring-regions) below.
-4. Click *Launch Game*. The launcher auto-updates from the channel you pick (stable/beta).
+4. Click *Launch Game*. The launcher checks the [GitHub releases](https://github.com/SalieriMZ/3sx-online/releases) page and prompts you when a newer build is out — game binaries are only ever downloaded from GitHub, never from the matchmaking host.
 
 ### Android
 
@@ -144,13 +144,13 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 | Discord Rich Presence app | `-DDISCORD_APP_ID=<id>` at cmake configure time | Register an app at <https://discord.com/developers/applications>. Omit the flag for an RPC-free build (presence is a no-op stub). |
 | Launcher update URL | `FISTBUMP_UPDATE_BASE_URL` env var when launching the launcher | Defaults to `http://<first-region-host>:20000`. Point at your stats/HTTP endpoint to enable auto-updates. Failures are silent — the launcher always lets the user click *Play*. |
 | Launcher region list (override) | `FISTBUMP_REGIONS="code\|label\|host\|port;..."` env var | Overrides the launcher's default region dropdown without touching `regions.txt` on the game side. |
-| Build version stamp | `-DBUILD_VERSION=1.7.28` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
+| Build version stamp | `-DBUILD_VERSION=1.7.29` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
 | Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
 | Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
 | Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
-For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.28` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
+For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.29` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
 ---
 
@@ -226,10 +226,10 @@ This prints version + git SHA + platform + build date + Discord App ID + whether
 To package a ready-to-share zip with the DLL closure pre-pruned, run:
 
 ```bash
-DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.28
+DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.29
 ```
 
-Output is at `dist/3sx-1.7.28-pc.zip`.
+Output is at `dist/3sx-1.7.29-pc.zip`.
 
 ### Android
 
