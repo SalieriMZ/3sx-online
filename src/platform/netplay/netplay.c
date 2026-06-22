@@ -27,6 +27,7 @@
 #include "sf33rd/Source/Game/ui/sc_sub.h"
 #include "port/sdl/netplay_screen.h"
 #include "platform/netplay/netplay_log.h"
+#include "platform/netplay/netplay_trace.h"
 #include "platform/netplay/discord_rpc.h"
 #include <time.h>
 #include "sf33rd/Source/Game/system/work_sys.h"
@@ -51,7 +52,22 @@
 // 3 frames = ~50 ms one-way buffer, absorbs ~100 ms RTT before rollback fires.
 // SF3 parry is 1-frame so we still keep the floor as low as is workable.
 #define DELAY_FRAMES 3
+// Lowered from 10: a smaller prediction window means a late packet causes a
+// short stall instead of a deep (8-10 frame) rollback that re-executes the
+// whole sim — fewer frames re-run = less exposure to any residual unsaved
+// state and a smaller visual hitch. 8 still absorbs ~130ms of jitter at 60fps.
+#define INPUT_PREDICTION_WINDOW 8
 #define PLAYER_COUNT 2
+
+// Desync detection: GekkoNet checksum exchange + the per-frame full-state djb2
+// + the diverged-frame state-buffer dump. Historically gated behind DEBUG, so
+// every shipped (Release) build ran ZERO detection and desyncs were invisible
+// in the field. Decoupled here so an instrumented Release can capture the exact
+// GekkoDesyncDetected frame + dump. Define NETPLAY_DESYNC_DETECT=0 to compile it
+// out where the cost matters (e.g. a perf-constrained Vita build).
+#ifndef NETPLAY_DESYNC_DETECT
+#define NETPLAY_DESYNC_DETECT 1
+#endif
 
 // Uncomment to enable packet drops
 // #define LOSSY_ADAPTER
@@ -69,6 +85,7 @@ typedef struct EffectState {
 typedef struct State {
     GameState gs;
     EffectState es;
+    LDREQ_Snapshot_t ld; // AFS load-request queue family (see gd3rd.h)
 } State;
 
 static GekkoSession* session = NULL;
@@ -77,6 +94,32 @@ static unsigned short remote_port = 0;
 static const char* remote_ip = NULL;
 static int player_number = 0;
 static int player_handle = 0;
+
+// Synctest (GekkoStressSession) mode: single-machine save-state validation.
+// Active when FISTBUMP_SYNCTEST=<check_distance> is set at session start. Both
+// actors are local; the stress session force-rolls-back every frame and
+// compares full-state checksums, so any unsaved sim state desyncs offline.
+static bool synctest_active = false;
+static int synctest_check_distance = 0;
+static int synctest_handles[2] = { 0, 0 };
+
+// Roll the AFS load-request queue family (q_ldreq) back with the sim. ON by
+// default — it is the fix for the round-transition desync. Set FISTBUMP_SAVE_LDREQ=0
+// to reproduce the old bug (useful for A/B-validating the fix under synctest).
+static bool save_ldreq_enabled = true;
+
+// Actual local input delay used this match (frames). Chosen per-match in
+// configure_gekko (relay-aware, env-overridable) instead of a hardcoded
+// constant, and reported in NetworkStats so the HUD reflects reality.
+static int current_local_delay = DELAY_FRAMES;
+
+// Run the full-state checksum / GekkoNet desync detection this match. OFF by
+// default for normal play — the per-save 477KB djb2 (×rollback depth) is a real
+// cost on a laggy link and only matters when actively hunting a desync. The
+// q_ldreq save-state FIX that actually keeps peers in sync is separate and
+// always on. Enabled when tracing, in synctest, or via FISTBUMP_DESYNC_DETECT=1.
+static bool desync_detect_enabled = false;
+
 static NetplaySessionState session_state = NETPLAY_SESSION_IDLE;
 static char matched_ip[64];
 static const char* matchmaking_server_ip = NULL;
@@ -98,7 +141,7 @@ static int stats_update_timer = 0;
 static int frame_max_rollback = 0;
 static NetworkStats network_stats = { 0 };
 
-#if DEBUG
+#if NETPLAY_DESYNC_DETECT
 #define STATE_BUFFER_MAX 20
 
 static State state_buffer[STATE_BUFFER_MAX] = { 0 };
@@ -194,18 +237,107 @@ static void configure_lossy_adapter(NET_DatagramSocket* sock) {
 }
 #endif
 
+// Pick the local input delay for this match. Higher delay absorbs steady-state
+// latency without rollback; too high hurts feel (SF3 parry is 1 frame). Relay
+// adds a hop, so budget one extra frame there. FISTBUMP_DELAY_FRAMES overrides
+// for playtesting. Kept per-match (set once at start) — GekkoNet's local delay
+// is a start-of-session knob; true RTT-adaptive mid-match needs the START
+// handshake to carry a measured peer RTT (a protocol change, deferred).
+static int compute_local_delay(void) {
+    const char* env = SDL_getenv("FISTBUMP_DELAY_FRAMES");
+    if (env != NULL && env[0] != '\0') {
+        int d = SDL_atoi(env);
+        if (d < 1) d = 1;
+        if (d > 10) d = 10;
+        return d;
+    }
+
+    const MatchResult* mr = Fistbump_GetResult();
+    if (mr != NULL && mr->use_relay) {
+        return DELAY_FRAMES + 1;
+    }
+    return DELAY_FRAMES;
+}
+
 static void configure_gekko() {
     GekkoConfig config;
     SDL_zero(config);
+
+    // Init the determinism trace (reads FISTBUMP_TRACE) and stamp what this
+    // build actually runs, so a captured log is unambiguous about whether
+    // detection/trace were active and which tuning was compiled in.
+    Netplay_TraceInit();
+
+    // Synctest: a GekkoStressSession drives the REAL local sim with a forced
+    // rollback every frame (up to check_distance), comparing full-state
+    // checksums — single machine, no peer, no net adapter. Any sim global that
+    // isn't in the save-state desyncs offline and deterministically. Drive it
+    // through round/continue transitions (character loads) to exercise the
+    // q_ldreq path specifically. Enable with FISTBUMP_SYNCTEST=<check_distance>
+    // (e.g. 7) and reach a match via the direct-P2P entry (--p2p-remote-ip).
+    synctest_active = false;
+    {
+        const char* sc = SDL_getenv("FISTBUMP_SYNCTEST");
+        if (sc != NULL && sc[0] != '\0') {
+            synctest_check_distance = SDL_atoi(sc);
+            if (synctest_check_distance < 1) {
+                synctest_check_distance = 1;
+            }
+            synctest_active = true;
+        }
+    }
+
+    {
+        const char* sl = SDL_getenv("FISTBUMP_SAVE_LDREQ");
+        save_ldreq_enabled = !(sl != NULL && sl[0] == '0');
+    }
+
+    {
+        // Off for normal play; on when it's actually wanted (tracing needs the
+        // checksum for cs=, synctest needs the compare, or explicit override).
+        const char* dd = SDL_getenv("FISTBUMP_DESYNC_DETECT");
+        desync_detect_enabled = synctest_active
+                                || (Netplay_TraceLevel() > 0)
+                                || (dd != NULL && dd[0] == '1');
+    }
+
+    current_local_delay = compute_local_delay();
+
+    Netplay_Log("BUILD", "desync_detect=%d trace=%d synctest=%d save_ldreq=%d state_size=%u delay=%d pred=%d",
+                desync_detect_enabled ? 1 : 0, Netplay_TraceLevel(),
+                synctest_active ? synctest_check_distance : 0,
+                save_ldreq_enabled ? 1 : 0,
+                (unsigned)sizeof(State), current_local_delay, INPUT_PREDICTION_WINDOW);
 
     config.num_players = PLAYER_COUNT;
     config.input_size = sizeof(u16);
     config.state_size = sizeof(State);
     config.max_spectators = 0;
-    config.input_prediction_window = 10;
+    config.input_prediction_window = INPUT_PREDICTION_WINDOW;
 
-#if DEBUG
-    config.desync_detection = true;
+    if (synctest_active) {
+        // desync_detection + the checksum compare are the whole point here, and
+        // are mutually exclusive with limited_saving in GekkoNet.
+        config.desync_detection = true;
+        config.limited_saving = false;
+        config.check_distance = (unsigned)synctest_check_distance;
+
+        if (gekko_create(&session, GekkoStressSession)) {
+            gekko_start(session, &config);
+        }
+        // Two LOCAL actors, no remote, no adapter.
+        for (int i = 0; i < PLAYER_COUNT; i++) {
+            synctest_handles[i] = gekko_add_actor(session, GekkoLocalPlayer, NULL);
+            gekko_set_local_delay(session, synctest_handles[i], current_local_delay);
+        }
+        player_handle = synctest_handles[player_number];
+        SDL_Log("Netplay: SYNCTEST stress session, check_distance=%d", synctest_check_distance);
+        Netplay_Log("GEKKO", "synctest stress session check_distance=%d", synctest_check_distance);
+        return;
+    }
+
+#if NETPLAY_DESYNC_DETECT
+    config.desync_detection = desync_detect_enabled;
 #endif
 
     if (gekko_create(&session, GekkoGameSession)) {
@@ -259,7 +391,7 @@ static void configure_gekko() {
 
         if (is_local_player) {
             player_handle = gekko_add_actor(session, GekkoLocalPlayer, NULL);
-            gekko_set_local_delay(session, player_handle, DELAY_FRAMES);
+            gekko_set_local_delay(session, player_handle, current_local_delay);
         } else {
             gekko_add_actor(session, GekkoRemotePlayer, &remote_address);
         }
@@ -291,7 +423,7 @@ static u16 recall_input(int player, int frame) {
     return input_history[player][frame % INPUT_HISTORY_MAX];
 }
 
-#if DEBUG
+#if NETPLAY_DESYNC_DETECT
 static uint32_t calculate_checksum(const State* state) {
     uint32_t hash = djb2_init();
     hash = djb2_updatep(hash, state);
@@ -385,6 +517,17 @@ static void clean_state_pointers(State* state) {
     for (int i = 0; i < SDL_arraysize(state->gs.task); i++) {
         state->gs.task[i].func_adrs = NULL;
     }
+
+    // The q_ldreq load-queue snapshot rolls back with the sim (gather/load_state)
+    // so the queue can't overflow across rollbacks — but its exact bytes are
+    // real-time AFS I/O bookkeeping (load progress / completion flags / retry /
+    // read byte-counts + raw result/lds pointers) that the netplay pump mutates
+    // OUT OF BAND on wall-clock. That is NOT deterministic sim state — the loaded
+    // RESULT lands in GameState (which IS checksummed) and load timing is
+    // synchronized by the LOADING pause. So exclude the whole snapshot from the
+    // cross-peer checksum; otherwise an in-flight load reads as a false desync
+    // (confirmed via the synctest: gs/es matched, only ldcs diverged).
+    SDL_zero(state->ld);
 }
 
 /// Save state in state buffer.
@@ -432,6 +575,61 @@ static void gather_state(State* dst) {
     SDL_copya(es->tail_ix, tail_ix);
     es->frwctr = frwctr;
     es->frwctr_min = frwctr_min;
+
+    // Load-request queue — rolls back with the sim so round/continue
+    // transitions converge across peers (see gd3rd.h / rollback-determinism.md).
+    // FISTBUMP_SAVE_LDREQ=0 leaves it zeroed (pre-fix behaviour) for A/B testing.
+    if (save_ldreq_enabled) {
+        LDREQ_Snapshot(&dst->ld);
+    } else {
+        SDL_zero(dst->ld);
+    }
+}
+
+// Set in process_events for the most-recently-processed advance so the save
+// that immediately follows it can tag the frame as a rollback re-sim. A
+// divergence shows up as the same frame number logging two different `cs=`
+// values across a rollback boundary.
+static bool trace_advance_rolling_back = false;
+
+// Gather the determinism-critical scalars from the live sim globals (exactly
+// the state just saved) and hand them to the trace channel. No-op unless
+// FISTBUMP_TRACE >= 1.
+static void emit_trace_frame(int frame, uint32_t checksum,
+                             uint32_t cs_gs, uint32_t cs_es, uint32_t cs_ld) {
+    extern bool afs_io_in_progress;
+
+    NetplayTraceFrame tf;
+    SDL_zero(tf);
+    tf.frame = frame;
+    tf.checksum = checksum;
+    tf.cs_gs = cs_gs;
+    tf.cs_es = cs_es;
+    tf.cs_ld = cs_ld;
+    tf.rollbacks = trace_advance_rolling_back ? 1 : 0;
+    tf.frames_behind = frames_behind;
+    tf.round_num = Round_num;
+    tf.wins[0] = PL_Wins[0];
+    tf.wins[1] = PL_Wins[1];
+    for (int i = 0; i < 4; i++) {
+        tf.gno[i] = G_No[i];
+        tf.cno[i] = C_No[i];
+    }
+    tf.rng_ix16 = Random_ix16;
+    tf.rng_ix32 = Random_ix32;
+    tf.rng_ix16_ex = Random_ix16_ex;
+    tf.rng_ix32_ex = Random_ix32_ex;
+    tf.ld_depth = Get_LDREQ_Depth();
+    tf.afs_io = afs_io_in_progress ? 1 : 0;
+    for (int i = 0; i < 2; i++) {
+        tf.p_char[i] = My_char[i];
+        tf.p_act[i] = plw[i].wu.cg_number;
+        tf.p_charidx[i] = plw[i].wu.char_index;
+        tf.p_x[i] = plw[i].wu.xyz[0].disp.pos;
+        tf.p_y[i] = plw[i].wu.xyz[1].disp.pos;
+        tf.p_vit[i] = plw[i].wu.vital_new;
+    }
+    Netplay_TraceFrame(&tf);
 }
 
 static void save_state(GekkoGameEvent* event) {
@@ -440,11 +638,29 @@ static void save_state(GekkoGameEvent* event) {
 
     gather_state(dst);
 
-#if DEBUG
     const int frame = event->data.save.frame;
-    const State* saved_state = note_state(dst, frame);
-    *event->data.save.checksum = calculate_checksum(saved_state);
+    uint32_t checksum = 0, cs_gs = 0, cs_es = 0, cs_ld = 0;
+#if NETPLAY_DESYNC_DETECT
+    // The checksum + state-buffer copy are the expensive part (≈477KB hash/copy
+    // per save, multiplied by rollback depth). Only do it when detection is
+    // actually enabled this match — normal play skips it entirely.
+    if (desync_detect_enabled) {
+        const State* saved_state = note_state(dst, frame);
+        checksum = calculate_checksum(saved_state);
+        *event->data.save.checksum = checksum;
+        if (Netplay_TraceOn()) {
+            // Per-surface sub-checksums over the cleaned clone so a desync can be
+            // localized to GameState / EffectState / the q_ldreq snapshot.
+            cs_gs = djb2_update_mem(djb2_init(), (const uint8_t*)&saved_state->gs, sizeof(saved_state->gs));
+            cs_es = djb2_update_mem(djb2_init(), (const uint8_t*)&saved_state->es, sizeof(saved_state->es));
+            cs_ld = djb2_update_mem(djb2_init(), (const uint8_t*)&saved_state->ld, sizeof(saved_state->ld));
+        }
+    }
 #endif
+
+    if (Netplay_TraceOn()) {
+        emit_trace_frame(frame, checksum, cs_gs, cs_es, cs_ld);
+    }
 }
 
 static void load_state(const State* src) {
@@ -461,6 +677,12 @@ static void load_state(const State* src) {
     SDL_copya(tail_ix, es->tail_ix);
     frwctr = es->frwctr;
     frwctr_min = es->frwctr_min;
+
+    // Load-request queue (see gather_state). Restored only when enabled; with
+    // FISTBUMP_SAVE_LDREQ=0 the live queue is left untouched (pre-fix behaviour).
+    if (save_ldreq_enabled) {
+        LDREQ_Restore(&src->ld);
+    }
 }
 
 static void load_state_from_event(GekkoGameEvent* event) {
@@ -526,7 +748,16 @@ static void process_session() {
     gekko_network_poll(session);
 
     u16 local_inputs = get_inputs();
-    gekko_add_local_input(session, player_handle, &local_inputs);
+    if (synctest_active) {
+        // Both actors are local: drive p1 from the controller, leave p2 idle.
+        // p1 acting (and KO'ing the idle p2) is enough to march through round /
+        // continue transitions where the unsaved q_ldreq state is consulted.
+        u16 idle = 0;
+        gekko_add_local_input(session, synctest_handles[0], &local_inputs);
+        gekko_add_local_input(session, synctest_handles[1], &idle);
+    } else {
+        gekko_add_local_input(session, player_handle, &local_inputs);
+    }
 
     int session_event_count = 0;
     GekkoSessionEvent** session_events = gekko_session_events(session, &session_event_count);
@@ -560,10 +791,14 @@ static void process_session() {
 
         case GekkoDesyncDetected: {
             const int frame = event->data.desynced.frame;
-            SDL_Log("Netplay: desync detected at frame %d", frame);
-            Netplay_Log("DESYNC", "frame=%d", frame);
+            const unsigned lc = event->data.desynced.local_checksum;
+            const unsigned rc = event->data.desynced.remote_checksum;
+            SDL_Log("Netplay: desync detected at frame %d (local=0x%08x remote=0x%08x)", frame, lc, rc);
+            Netplay_Log("DESYNC", "frame=%d local=0x%08x remote=0x%08x synctest=%d",
+                        frame, lc, rc, synctest_active ? 1 : 0);
+            Netplay_TraceTrigger("DESYNC", "frame=%d local=0x%08x remote=0x%08x", frame, lc, rc);
 
-#if DEBUG
+#if NETPLAY_DESYNC_DETECT
             dump_saved_state(frame);
 #endif
             break;
@@ -594,6 +829,7 @@ static void process_events(bool drawing_allowed) {
 
         case GekkoAdvanceEvent: {
             const bool rolling_back = event->data.adv.rolling_back;
+            trace_advance_rolling_back = rolling_back;
             advance_game(event, drawing_allowed && !rolling_back);
             frames_rolled_back += rolling_back ? 1 : 0;
             last_advance_frame = event->data.adv.frame;
@@ -628,7 +864,7 @@ static void update_network_stats() {
         gekko_network_stats(session, player_handle ^ 1, &net_stats);
 
         network_stats.ping = net_stats.avg_ping;
-        network_stats.delay = DELAY_FRAMES;
+        network_stats.delay = current_local_delay;
 
         if (frame_max_rollback < network_stats.rollback) {
             // Don't decrease the reading by more than a frame to account for
@@ -677,6 +913,18 @@ static void run_netplay() {
 
     if (fistbump_peer_loading) {
         // Peer stalled on AFS — pause our advance to prevent rollback blow-out.
+        update_network_stats();
+        return;
+    }
+
+    // Synctest has no peer to gate on, but must still mimic the LOADING pause:
+    // never let the stress session advance / roll back while an AFS load is in
+    // flight. Real netplay pauses BOTH peers until loads finish (so a rollback
+    // never re-executes over out-of-band, wall-clock load progress) — without
+    // this the single-machine synctest false-desyncs on the effect pool during
+    // the character load (confirmed: the es sub-checksum diverges only at
+    // ld>0 / afs=1 frames). The AFS pump above keeps the load completing.
+    if (synctest_active && afs_io_in_progress) {
         update_network_stats();
         return;
     }
@@ -757,7 +1005,7 @@ void Netplay_BeginMatchmaking() {
     }
     // Reuse the existing TCP if already authenticated so the server keeps our room membership.
     if (!Fistbump_IsLoggedIn() || Fistbump_GetConnectState() != FISTBUMP_CONN_CONNECTED) {
-        Fistbump_Start(matchmaking_server_ip, matchmaking_server_port, 19001, Paths_GetPrefPath());
+        Fistbump_Start(matchmaking_server_ip, matchmaking_server_port, FISTBUMP_LOCAL_UDP_PORT, Paths_GetPrefPath());
     }
     matchmaking_pending = true;
     log_transition_state("BeginMatchmaking");
@@ -813,7 +1061,7 @@ void Netplay_FindMatch() {
 
 void Netplay_CancelMatchmaking() {
     // In-room: preserve TCP + profile so we keep receiving ROOM STATE.
-    // Out-of-room: full reset (legacy 1.6.9 behaviour).
+    // Out-of-room: full reset.
     if (Fistbump_GetRoom() != NULL) {
         Fistbump_EndMatch();
     } else {
@@ -916,6 +1164,7 @@ void Netplay_Run() {
         transition_ready_frames = 0;
         matchmaking_pending = false;
         direct_p2p_pending = false;
+        synctest_active = false;
         player_number = 0;
         player_handle = 0;
         remote_ip = NULL;

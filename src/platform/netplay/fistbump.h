@@ -6,6 +6,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+// Local UDP port the client binds for NAT-punch + match data (the server's
+// --udp-port is advertised separately in START). Single definition so the
+// matchmaking + region-select entry points can't disagree.
+#define FISTBUMP_LOCAL_UDP_PORT 19001
+
 typedef enum {
     FISTBUMP_IDLE,
     FISTBUMP_CONNECTING,
@@ -73,6 +78,16 @@ const char* Fistbump_GetLastError(void);
 void Fistbump_ClearError(void);
 // Username from current PROFILE response (empty if not logged in).
 const char* Fistbump_GetUsername(void);
+// Broker/server version reported in the SESSION line ("" if not reported).
+const char* Fistbump_GetServerVersion(void);
+
+// In-game update check (pre-auth VERSION command). UpdateChecked() is true once
+// the server has replied; UpdateAvailable() is true when the server's latest
+// release differs from this build. GetLatestVersion()/GetUpdateURL() describe it.
+bool Fistbump_UpdateChecked(void);
+bool Fistbump_UpdateAvailable(void);
+const char* Fistbump_GetLatestVersion(void);
+const char* Fistbump_GetUpdateURL(void);
 void Fistbump_Queue();                       // legacy: casual
 void Fistbump_QueueMode(const char* mode);   // "casual" | "ranked"
 // Edge-detected LOADING signal sender. Pass true while the local CPS3 AFS
@@ -126,6 +141,7 @@ void Fistbump_HandleROOM(const char* line);
 void Fistbump_AcceptMatch();
 void Fistbump_DeclineMatch();
 void Fistbump_Run();
+bool Fistbump_WantsPump(void);  // true when the UI tick must pump Fistbump_Run this frame
 FistbumpState Fistbump_GetState();
 FistbumpConnectState Fistbump_GetConnectState();
 const MatchResult* Fistbump_GetResult();  // valid when MATCHED

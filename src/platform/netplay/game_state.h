@@ -483,6 +483,8 @@ typedef struct GameState {
     u16 vital_inc_timer;
     u16 vital_dec_timer;
     s16 sag_inc_timer[2];
+    u32 omop_spmv_ng_table[2];
+    u32 omop_spmv_ng_table2[2];
 
     // cmd_data
 
@@ -636,6 +638,10 @@ typedef struct GameState {
     s16 old_mes_no3;
     s16 old_mes_no_pl;
     s16 mes_timer;
+
+    // work_sys
+
+    u32 system_timer;
 } GameState;
 
 void GameState_Save(GameState* dst);

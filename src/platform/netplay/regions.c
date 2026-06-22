@@ -50,7 +50,7 @@ static bool parse_line(char* line) {
     SDL_strlcpy(r->label, trim(fields[1]), sizeof(r->label));
     SDL_strlcpy(r->ip,    trim(fields[2]), sizeof(r->ip));
     r->port = SDL_atoi(trim(fields[3]));
-    r->ping_ms = -1.0f;
+    r->ping_ms = REGION_PING_UNTESTED;
     if (r->code[0] == '\0' || r->ip[0] == '\0' || r->port <= 0) return false;
     region_count += 1;
     return true;
@@ -146,7 +146,7 @@ void Regions_Select(int idx) {
     Config_SetInt(CFG_KEY_NETPLAY_REGION_IDX, idx);
     Netplay_SetMatchmakingParams(regions[idx].ip, regions[idx].port);
     Fistbump_Reset();
-    Fistbump_Start(regions[idx].ip, regions[idx].port, 19001, Paths_GetPrefPath());
+    Fistbump_Start(regions[idx].ip, regions[idx].port, FISTBUMP_LOCAL_UDP_PORT, Paths_GetPrefPath());
     Netplay_Log("REGION", "switch from=%s to=%s",
                 (prev >= 0 && prev < region_count) ? regions[prev].code : "?",
                 regions[idx].code);
@@ -160,7 +160,7 @@ void Regions_SetPing(int idx, float ms) {
 static int ping_worker(void* user_data) {
     (void)user_data;
     for (int i = 0; i < region_count; i++) {
-        regions[i].ping_ms = -2.0f;
+        regions[i].ping_ms = REGION_PING_PENDING;
         regions[i].ping_ms = Fistbump_PingHost(regions[i].ip, regions[i].port, 2.0f);
     }
     pinging = false;
@@ -179,6 +179,19 @@ void Regions_PingAllAsync(void) {
 
 bool Regions_IsPinging(void) {
     return pinging;
+}
+
+void Regions_FormatLabel(const Region* r, char* out, int out_size) {
+    if (r == NULL || out == NULL || out_size <= 0) {
+        return;
+    }
+    if (r->ping_ms >= 0.0f) {
+        SDL_snprintf(out, out_size, "%s -- %.0f ms", r->label, (double)r->ping_ms);
+    } else if (r->ping_ms < -1.5f) { // PENDING (-2.0) vs UNTESTED (-1.0)
+        SDL_snprintf(out, out_size, "%s -- pinging...", r->label);
+    } else {
+        SDL_snprintf(out, out_size, "%s", r->label);
+    }
 }
 
 #endif

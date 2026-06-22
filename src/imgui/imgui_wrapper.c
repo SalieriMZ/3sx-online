@@ -9,10 +9,6 @@
 #include "imgui/dcimgui/dcimgui_impl_sdl3.h"
 #include "imgui/settings_panel.h"
 #include "imgui/chat_panel.h"
-#include "imgui/netplay_panel.h"
-#if NETPLAY_ENABLED
-#include "imgui/login_panel.h"
-#endif
 #include "imgui/dcimgui/dcimgui_impl_sdlgpu3.h"
 #include <SDL3/SDL.h>
 
@@ -112,14 +108,8 @@ void ImGuiW_Init(SDL_Window* window, ImGui_ImplSDLGPU3_InitInfo* init_info) {
 
     ChatPanel_Init();
     ImGuiW_RegisterPanel(ChatPanel_Render);
-
-    NetplayPanel_Init();
-    ImGuiW_RegisterPanel(NetplayPanel_Render);
-
-#if NETPLAY_ENABLED
-    LoginPanel_Init();
-    ImGuiW_RegisterPanel(LoginPanel_Render);
-#endif
+    // Account/region/matchmaking now live in the native online UI (online_ui.c);
+    // ImGui keeps only the in-match chat + the FPS/netstats overlay.
 }
 
 void ImGuiW_Finish() {

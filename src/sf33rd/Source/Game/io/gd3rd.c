@@ -19,6 +19,8 @@
 
 #include "port/io/afs.h"
 
+#include <string.h>
+
 typedef struct {
     u8 type;
     u8 ix;
@@ -221,6 +223,40 @@ void Init_Load_Request_Queue_1st() {
     }
 
     ldreq_break = 0;
+}
+
+// Number of busy (be != 0) entries in the load-request queue. Read-only; used
+// by the netplay determinism trace (and the rollback save-state work) to expose
+// the queue depth that is consulted at round/continue transitions.
+s32 Get_LDREQ_Depth(void) {
+    s32 n = 0;
+    s16 i;
+    for (i = 0; i < (s16)(sizeof(q_ldreq) / sizeof(REQ)); i++) {
+        if (q_ldreq[i].be != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+// Defined later in this TU; forward-declared so the snapshot helpers (placed
+// here next to Get_LDREQ_Depth) can reference it.
+extern bool afs_io_in_progress;
+
+void LDREQ_Snapshot(LDREQ_Snapshot_t* dst) {
+    memcpy(dst->q_ldreq, q_ldreq, sizeof(q_ldreq));
+    memcpy(dst->ldreq_result, ldreq_result, sizeof(ldreq_result));
+    memcpy(dst->plt_req, plt_req, sizeof(plt_req));
+    dst->ldreq_break = ldreq_break;
+    dst->afs_io_in_progress = (u8)afs_io_in_progress;
+}
+
+void LDREQ_Restore(const LDREQ_Snapshot_t* src) {
+    memcpy(q_ldreq, src->q_ldreq, sizeof(q_ldreq));
+    memcpy(ldreq_result, src->ldreq_result, sizeof(ldreq_result));
+    memcpy(plt_req, src->plt_req, sizeof(plt_req));
+    ldreq_break = src->ldreq_break;
+    afs_io_in_progress = src->afs_io_in_progress != 0;
 }
 
 void Request_LDREQ_Break() {

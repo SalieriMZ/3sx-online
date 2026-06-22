@@ -7,6 +7,10 @@
 #include <SDL3/SDL.h>
 
 void NetstatsRenderer_Render() {
+#if !IMGUI
+    // PC/Android already show ping + rollback in the ImGui FPS/netstats overlay,
+    // so this SF3-text readout is redundant there — only draw it on builds
+    // without the overlay (Vita).
     if (Netplay_GetSessionState() != NETPLAY_SESSION_RUNNING) {
         return;
     }
@@ -18,6 +22,7 @@ void NetstatsRenderer_Render() {
     SDL_snprintf(buffer, sizeof(buffer), "R:%d P:%d", stats.rollback, stats.ping);
 
     SSPutStrPro(0, 2, 2, 9, 0xFFFFFFFF, buffer);
+#endif
 }
 
 #endif // NETPLAY_ENABLED

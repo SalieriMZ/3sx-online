@@ -92,8 +92,8 @@ bool dead_voice_flag;
 
 UNK_1 rambod[2];
 UNK_2 ramhan[2];
-u32 omop_spmv_ng_table[2];  // FIXME: might not be necessary to put in GameState
-u32 omop_spmv_ng_table2[2]; // FIXME: might not be necessary to put in GameState
+u32 omop_spmv_ng_table[2];  // saved in GameState (GS_SAVE) — see rollback-determinism.md
+u32 omop_spmv_ng_table2[2]; // saved in GameState (GS_SAVE) — see rollback-determinism.md
 u16 vital_inc_timer;
 u16 vital_dec_timer;
 char cmd_sel[2];

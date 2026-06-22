@@ -9,22 +9,23 @@ If you want to contribute, this file describes the workflow, the layout of the r
 | Path | Purpose |
 |---|---|
 | [`SalieriMZ/3sx-online`](https://github.com/SalieriMZ/3sx-online) | The game client. Everything that runs on your PC / phone / Vita. |
-| [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server) | The fistbump matchmaking server + the desktop launcher. |
+| [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server) | The fistbump matchmaking server. |
 
 The client tracks upstream `crowded-street/3sx` as the `upstream` remote. Game-engine fixes flow upstream-first whenever it makes sense; netplay-specific work lives here.
 
 ## Branching
 
 - `main` — what's currently shipping. Tagged `stable-X.Y.Z` after each successful promotion.
-- `beta` — staging branch. Fixes land here first, get tested end-to-end across all three platforms, then promote to `main`.
-- Feature branches → PR against `beta`.
+- `dev-*` — short-lived feature/fix branches. Cut one off `main`, do the work, open a PR back into `main`, then delete it. There is no long-lived staging branch.
+- Ship by merging to `main` and pushing a `stable-X.Y.Z` tag.
 
-Each release tag triggers the launcher's auto-update flow if you've also bumped:
+A client release moves three values in lockstep:
 
-1. `launcher/launcher.py` → `APP_VERSION`
-2. `server.py` → `ALLOWED_VERSIONS` (add the new entry; don't remove the old ones).
+1. `CMakeLists.txt` → `BUILD_VERSION` (the app/release version stamped into `3sx --version`).
+2. `src/platform/netplay/fistbump.c` → `FISTBUMP_CLIENT_VERSION` (the game wire-protocol version).
+3. `server.py` → `ALLOWED_VERSIONS` (add the new protocol version; the server rejects anything not whitelisted).
 
-These two have to move together with the client release — otherwise existing clients are kicked with `REJECT version mismatch`.
+If these drift, existing clients are kicked with `REJECT version mismatch`. Updates are surfaced to players by the in-game version check (the client sends a `VERSION` command, the server replies with the latest release + its GitHub releases URL) — there is no launcher and no self-hosted update channel.
 
 ## Building locally
 
@@ -44,7 +45,7 @@ If you change any of `build-deps*.sh`, the third_party cache key changes — fir
 
 A reference deployment is documented in the [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server) README. Two ways:
 
-1. Run `python server.py` locally on `localhost:9000` for development.
+1. Run `python server.py` locally on `localhost:19000` for development.
 2. Use `deploy.sh` to ship the systemd unit to your own Linux box (set `REMOTE_HOST`, `SSH_KEY`, `PUBLIC_HOST` env vars).
 
 Clients pick a matchmaking host through a `regions.txt` file (see `regions.example.txt`). There is **no hardcoded production server** in the client codebase — that's intentional. Forks can populate their own list.
@@ -59,9 +60,8 @@ Clients pick a matchmaking host through a `regions.txt` file (see `regions.examp
 
 `build.sh pc` is the smoke test. For online changes:
 
-- Spin up a local fistbump (`python server.py --tcp-port 9000`), point the client at it via `FISTBUMP_HOST=127.0.0.1 FISTBUMP_PORT=9000`, and exercise REGISTER / LOGIN / QUEUE / MATCH.
-- `test_client.py` in the server repo simulates two peers — useful for matchmaking changes that don't need the game running.
-- `test_*.py` in the server repo cover chat/ELO/relay/decline E2E.
+- Spin up a local fistbump (`python server.py --tcp-port 19000 --udp-port 19001 -v`), then point the **game** at it by adding a `regions.txt` line `local|Local|127.0.0.1|19000` where the client reads it. Exercise REGISTER / LOGIN / QUEUE / MATCH. With `FISTBUMP_ALLOW_ANON=1` you can also drive the server with raw `nc` (see the server README + `docs/protocol.md`).
+- `test_room_e2e.py` in the server repo drives register → room → matches end-to-end (no game needed). Determinism work is validated with the in-client synctest (`FISTBUMP_SYNCTEST` — see `docs/rollback-determinism.md`), not a server test.
 
 CI runs the full PC + macOS + Android + Vita matrix on every PR. Don't merge with red CI unless you know exactly why it's failing.
 

@@ -23,7 +23,28 @@ s32 load_it_use_this_key(u16 fnum, s16 key);
 void Init_Load_Request_Queue_1st();
 void Request_LDREQ_Break();
 u8 Check_LDREQ_Break();
+s32 Get_LDREQ_Depth(void);
 void Push_LDREQ_Queue_Player(s16 id, s16 ix);
+
+// Rollback snapshot of the AFS load-request queue family. The simulation reads
+// the queue's drain state at round/continue boundaries (Check_LDREQ_Clear /
+// Check_LDREQ_Queue_Player), but the netplay AFS pump also drains it out-of-band
+// on per-peer wall-clock timing — so it must roll back atomically with the sim
+// or the peers diverge at round transitions (and Check_LDREQ_Clear can
+// fatal_error). The live AFS file handle is deliberately NOT snapshotted: it is
+// real-time I/O, self-corrected by fsOpen's reopen, and is not a determinism
+// gate (the sim consults the result flags / queue occupancy below, not the
+// handle).
+typedef struct LDREQ_Snapshot_t {
+    REQ q_ldreq[16];
+    u8 ldreq_result[294];
+    s16 plt_req[2];
+    u8 ldreq_break;
+    u8 afs_io_in_progress;
+} LDREQ_Snapshot_t;
+
+void LDREQ_Snapshot(LDREQ_Snapshot_t* dst);
+void LDREQ_Restore(const LDREQ_Snapshot_t* src);
 void Check_LDREQ_Queue();
 s32 Check_LDREQ_Clear();
 s32 Check_LDREQ_Queue_Player(s16 id);

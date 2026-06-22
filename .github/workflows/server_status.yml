@@ -42,13 +42,19 @@ jobs:
         id: probe
         run: |
           set -e
+          # Endpoints come from repo secrets (host:port) so production IPs are
+          # never committed. Set STATUS_HOST_US_EAST_1 / STATUS_HOST_SA_EAST_1 in
+          # the repo's Actions secrets; entries left empty are skipped.
           declare -A HOSTS=(
-            [us-east-1]=44.220.2.85:19000
-            [sa-east-1]=56.126.80.178:19000
+            [us-east-1]=${{ secrets.STATUS_HOST_US_EAST_1 }}
+            [sa-east-1]=${{ secrets.STATUS_HOST_SA_EAST_1 }}
           )
           any_down=0
           summary=""
           for code in "${!HOSTS[@]}"; do
+            if [ -z "${HOSTS[$code]}" ]; then
+              continue
+            fi
             ip="${HOSTS[$code]%:*}"
             port="${HOSTS[$code]#*:}"
             label="$code"

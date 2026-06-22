@@ -4,10 +4,7 @@
 #include "platform/netplay/netplay.h"
 #include "platform/netplay/netplay_log.h"
 #include "port/sdl/netplay_screen.h"
-#if IMGUI
-#include "imgui/login_panel.h"
-#include "imgui/netplay_panel.h"
-#endif
+#include "port/sdl/online_ui.h"
 #include "sf33rd/AcrSDK/common/pad.h"
 #include "sf33rd/Source/Game/effect/eff40.h"
 #include "sf33rd/Source/Game/effect/eff57.h"
@@ -44,18 +41,30 @@ __attribute__((unused)) static bool check_netplay_cancelled() {
     return true;
 }
 
-void Setup_Netplay_Menu(struct _TASK* task_ptr) {
-    s16 ix;
-    s16 char_index;
+// Shared exit-to-title sequence. Runs from both the native-UI "Back" request
+// (OnlineUI_ConsumeExitRequest) and the legacy SF3 cursor fallback.
+static void netplay_menu_do_exit(struct _TASK* task_ptr) {
+    Menu_Suicide[0] = 0;
+    Menu_Suicide[1] = 1;
+    Menu_Suicide[2] = 1;
+    task_ptr->r_no[1] = 1;
+    task_ptr->r_no[2] = 0;
+    task_ptr->r_no[3] = 0;
+    task_ptr->free[0] = 0;
+    Order[115] = 4;
+    Order_Timer[115] = 4;
 
-#if IMGUI
-    // Surface overlay-login + netplay panel when user enters Network menu.
-    // If already logged in (refresh-token autologin succeeded), the panel
-    // shows the signed-in status; otherwise it prompts for credentials and
-    // blocks matchmaking until auth completes. Hide hooks live on exit.
-    LoginPanel_Show();
-    NetplayPanel_Show();
-#endif
+    Netplay_HandleMenuExit();
+    OnlineUI_Hide();
+    Netplay_Log("MENU", "exit network");
+    SE_dir_selected();
+}
+
+void Setup_Netplay_Menu(struct _TASK* task_ptr) {
+    // Surface the native online UI when the user enters the Network menu. If a
+    // refresh token auto-logs-in it shows the signed-in hub; otherwise it
+    // prompts for credentials. Hidden again on menu exit.
+    OnlineUI_Show();
     Netplay_Log("MENU", "enter network logged_in=%d", Fistbump_IsLoggedIn() ? 1 : 0);
 
     Menu_Page_Buff = Menu_Page;
@@ -72,34 +81,10 @@ void Setup_Netplay_Menu(struct _TASK* task_ptr) {
     Order_Timer[0x73] = 1;
     effect_57_init(0x73, MENU_HEADER_NETWORK, 0, 0x3F, 2);
 
-    switch (Menu_Page) {
-    case 0:
-        effect_66_init(0x8A, 8, 2, 0, -1, -1, 0x800C);
-        Order[0x8A] = 3;
-        Order_Timer[0x8A] = 1;
-        break;
-
-    default:
-        effect_66_init(0x8A, 8, 2, 0, -1, -1, 0x8006);
-        Order[0x8A] = 3;
-        Order_Timer[0x8A] = 1;
-
-        for (ix = 0; ix < Menu_Max; ix++) {
-            effect_A4_init(0, ix, ix, 2);
-
-            if (Menu_Page != 0 || ix != (Menu_Max - 1)) {
-                effect_A4_init(1, ix, ix, 2);
-            }
-        }
-
-        // EXIT button
-        effect_40_init(2, 0, 0x48, 0, 2, 1);
-        effect_40_init(2, 1, 0x49, 0, 2, 1);
-        effect_40_init(2, 2, 0x4A, 0, 2, 0);
-        effect_40_init(2, 3, 0x4B, 0, 2, 2);
-
-        break;
-    }
+    // The native online UI (online_ui.c) draws the whole Network menu over the
+    // SF3 background, so skip ALL the legacy effect sprites that rendered under
+    // it: the effect_66 backdrop panel (the dark box), the effect_A4 cursor rows
+    // (FIND MATCH / LOGOUT ACCOUNT) and the effect_40 EXIT button.
 }
 
 void Netplay_Menu(struct _TASK* task_ptr) {
@@ -157,6 +142,23 @@ void Netplay_Menu(struct _TASK* task_ptr) {
         break;
 
     case 4:
+        // The native online UI owns all netplay input (login / ranked / casual /
+        // rooms / accept / decline / cancel / logout) while it's engaged on this
+        // menu; the SF3 cursor handling below is a fallback for when it isn't.
+        if (OnlineUI_ConsumeExitRequest()) {
+            netplay_menu_do_exit(task_ptr);
+            break;
+        }
+        if (OnlineUI_IsCapturingInput()) {
+            break;
+        }
+        // Match handoff: online_ui draws "Starting match..." but captures no
+        // input here; keep the legacy cursor inert so a stray confirm press
+        // can't inject a QUEUE / logout mid-punch.
+        if (fs == FISTBUMP_GAME_START || fs == FISTBUMP_SENDING_UDP) {
+            break;
+        }
+
         Pause_ID = 0;
         Dir_Move_Sub(task_ptr, 0);
 
@@ -171,27 +173,7 @@ void Netplay_Menu(struct _TASK* task_ptr) {
 
         if ((IO_Result == SWK_EAST || (IO_Result == SWK_SOUTH && Menu_Cursor_Y[0] == Menu_Max && Menu_Page != 0)) &&
             (fs == FISTBUMP_IDLE || fs == FISTBUMP_AWAITING_LOGIN)) {
-            Menu_Suicide[0] = 0;
-            Menu_Suicide[1] = 1;
-            Menu_Suicide[2] = 1;
-            task_ptr->r_no[1] = 1;
-            task_ptr->r_no[2] = 0;
-            task_ptr->r_no[3] = 0;
-            task_ptr->free[0] = 0;
-            Order[115] = 4;
-            Order_Timer[115] = 4;
-
-            Netplay_HandleMenuExit();
-#if IMGUI
-            // Overlay-login + netplay panel are only valid on the Network
-            // menu screen. Off-menu queue / region changes hit the
-            // matchmaking state machine when the SF3 task graph is on
-            // a different page → empty credentials modal + state=5 garbage.
-            LoginPanel_Hide();
-            NetplayPanel_Hide();
-#endif
-            Netplay_Log("MENU", "exit network");
-            SE_dir_selected();
+            netplay_menu_do_exit(task_ptr);
             break;
         } else if (IO_Result == SWK_EAST && Fistbump_GetState() == FISTBUMP_AWAITING_MATCH) {
             Fistbump_CancelQueue();
@@ -211,19 +193,8 @@ void Netplay_Menu(struct _TASK* task_ptr) {
                 break;
 
             case 1:
-                Menu_Suicide[0] = 0;
-                Menu_Suicide[1] = 1;
-                Menu_Suicide[2] = 1;
-                task_ptr->r_no[1] = 1;
-                task_ptr->r_no[2] = 0;
-                task_ptr->r_no[3] = 0;
-                task_ptr->free[0] = 0;
-                Order[115] = 4;
-                Order_Timer[115] = 4;
-
                 Fistbump_Logout();
-                Netplay_HandleMenuExit();
-                SE_dir_selected();
+                netplay_menu_do_exit(task_ptr);
                 break;
             }
 

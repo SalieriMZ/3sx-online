@@ -148,7 +148,10 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(OK_Priority);
     GS_SAVE(Stock_My_char);
     GS_SAVE(Stock_Player_Color);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Music_Fade);
+    // The commented-out globals below are intentionally excluded from the
+    // rollback save-state: they are local-only audio/UI presentation state
+    // (music/BGM volume, lamp/score display), not deterministic sim state.
+    //     GS_SAVE(Music_Fade);
     GS_SAVE(Stop_SG);
     GS_SAVE(Operator_Status);
     GS_SAVE(Round_Operator);
@@ -162,7 +165,7 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Before_Look);
     GS_SAVE(Attack_Count_No0);
     GS_SAVE(Standing_Master_Timer);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(PB_Music_Off);
+    //     GS_SAVE(PB_Music_Off);
     GS_SAVE(No_Death);
     GS_SAVE(Flash_MT);
     GS_SAVE(Squat_Timer);
@@ -170,10 +173,10 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Turn_Over);
     GS_SAVE(Turn_Over_Timer);
     GS_SAVE(Jump_Pass_Timer);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(sa_gauge_flash);
+    //     GS_SAVE(sa_gauge_flash);
     GS_SAVE(Receive_Flag);
     GS_SAVE(Disposal_Again);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(BGM_Vol);
+    //     GS_SAVE(BGM_Vol);
     GS_SAVE(Used_char);
     GS_SAVE(Break_Com);
     GS_SAVE(aiuchi_flag);
@@ -205,7 +208,7 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Introduce_Break_Into);
     GS_SAVE(gouki_wins);
     GS_SAVE(EM_Rank);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Disp_PERFECT);
+    //     GS_SAVE(Disp_PERFECT);
     GS_SAVE(Escape_SS);
     GS_SAVE(Deley_Shot_No);
     GS_SAVE(Deley_Shot_Timer);
@@ -222,7 +225,7 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Stage_Continue);
     GS_SAVE(Pause_Hit_Marks);
     GS_SAVE(Extra_Break);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Shin_Gouki_BGM);
+    //     GS_SAVE(Shin_Gouki_BGM);
     GS_SAVE(Stage_Lost_Round);
     GS_SAVE(Stage_Perfect_Finish);
     GS_SAVE(Stage_Cheap_Finish);
@@ -239,8 +242,8 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(SO_No);
     GS_SAVE(Disp_Command_Name);
     GS_SAVE(SC_No);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(BGM_No);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(BGM_Timer);
+    //     GS_SAVE(BGM_No);
+    //     GS_SAVE(BGM_Timer);
     GS_SAVE(EM_List);
     GS_SAVE(Sel_EM_Complete);
     GS_SAVE(Temporary_EM);
@@ -291,10 +294,10 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Message_Suicide);
     GS_SAVE(Disp_Cockpit);
     GS_SAVE(Select_Arts);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Lamp_No);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Lamp_Index);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Lamp_Color);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Stop_Update_Score);
+    //     GS_SAVE(Lamp_No);
+    //     GS_SAVE(Lamp_Index);
+    //     GS_SAVE(Lamp_Color);
+    //     GS_SAVE(Stop_Update_Score);
     GS_SAVE(test_flag);
     GS_SAVE(ixbfw_cut);
     GS_SAVE(Cont_No);
@@ -446,7 +449,7 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(scrr);
     GS_SAVE(vital_stop_flag);
     GS_SAVE(gauge_stop_flag);
-    // [PHASE-A LOCAL_OK]     GS_SAVE(Lamp_Timer);
+    //     GS_SAVE(Lamp_Timer);
     GS_SAVE(Cont_Timer);
     GS_SAVE(Plate_X);
     GS_SAVE(Plate_Y);
@@ -487,6 +490,8 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(vital_inc_timer);
     GS_SAVE(vital_dec_timer);
     GS_SAVE(sag_inc_timer);
+    GS_SAVE(omop_spmv_ng_table);
+    GS_SAVE(omop_spmv_ng_table2);
 
     // cmd_data
 
@@ -640,6 +645,9 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(old_mes_no3);
     GS_SAVE(old_mes_no_pl);
     GS_SAVE(mes_timer);
+
+    // work_sys
+    GS_SAVE(system_timer);
 }
 
 #define GS_LOAD(member) SDL_memcpy(&member, &src->member, sizeof(member))
@@ -773,7 +781,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(OK_Priority);
     GS_LOAD(Stock_My_char);
     GS_LOAD(Stock_Player_Color);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Music_Fade);
+    //     GS_LOAD(Music_Fade);
     GS_LOAD(Stop_SG);
     GS_LOAD(Operator_Status);
     GS_LOAD(Round_Operator);
@@ -787,7 +795,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Before_Look);
     GS_LOAD(Attack_Count_No0);
     GS_LOAD(Standing_Master_Timer);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(PB_Music_Off);
+    //     GS_LOAD(PB_Music_Off);
     GS_LOAD(No_Death);
     GS_LOAD(Flash_MT);
     GS_LOAD(Squat_Timer);
@@ -795,10 +803,10 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Turn_Over);
     GS_LOAD(Turn_Over_Timer);
     GS_LOAD(Jump_Pass_Timer);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(sa_gauge_flash);
+    //     GS_LOAD(sa_gauge_flash);
     GS_LOAD(Receive_Flag);
     GS_LOAD(Disposal_Again);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(BGM_Vol);
+    //     GS_LOAD(BGM_Vol);
     GS_LOAD(Used_char);
     GS_LOAD(Break_Com);
     GS_LOAD(aiuchi_flag);
@@ -830,7 +838,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Introduce_Break_Into);
     GS_LOAD(gouki_wins);
     GS_LOAD(EM_Rank);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Disp_PERFECT);
+    //     GS_LOAD(Disp_PERFECT);
     GS_LOAD(Escape_SS);
     GS_LOAD(Deley_Shot_No);
     GS_LOAD(Deley_Shot_Timer);
@@ -847,7 +855,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Stage_Continue);
     GS_LOAD(Pause_Hit_Marks);
     GS_LOAD(Extra_Break);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Shin_Gouki_BGM);
+    //     GS_LOAD(Shin_Gouki_BGM);
     GS_LOAD(Stage_Lost_Round);
     GS_LOAD(Stage_Perfect_Finish);
     GS_LOAD(Stage_Cheap_Finish);
@@ -864,8 +872,8 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(SO_No);
     GS_LOAD(Disp_Command_Name);
     GS_LOAD(SC_No);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(BGM_No);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(BGM_Timer);
+    //     GS_LOAD(BGM_No);
+    //     GS_LOAD(BGM_Timer);
     GS_LOAD(EM_List);
     GS_LOAD(Sel_EM_Complete);
     GS_LOAD(Temporary_EM);
@@ -916,10 +924,10 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Message_Suicide);
     GS_LOAD(Disp_Cockpit);
     GS_LOAD(Select_Arts);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Lamp_No);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Lamp_Index);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Lamp_Color);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Stop_Update_Score);
+    //     GS_LOAD(Lamp_No);
+    //     GS_LOAD(Lamp_Index);
+    //     GS_LOAD(Lamp_Color);
+    //     GS_LOAD(Stop_Update_Score);
     GS_LOAD(test_flag);
     GS_LOAD(ixbfw_cut);
     GS_LOAD(Cont_No);
@@ -1071,7 +1079,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(scrr);
     GS_LOAD(vital_stop_flag);
     GS_LOAD(gauge_stop_flag);
-    // [PHASE-A LOCAL_OK]     GS_LOAD(Lamp_Timer);
+    //     GS_LOAD(Lamp_Timer);
     GS_LOAD(Cont_Timer);
     GS_LOAD(Plate_X);
     GS_LOAD(Plate_Y);
@@ -1112,6 +1120,8 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(vital_inc_timer);
     GS_LOAD(vital_dec_timer);
     GS_LOAD(sag_inc_timer);
+    GS_LOAD(omop_spmv_ng_table);
+    GS_LOAD(omop_spmv_ng_table2);
 
     // cmd_data
 
@@ -1265,4 +1275,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(old_mes_no3);
     GS_LOAD(old_mes_no_pl);
     GS_LOAD(mes_timer);
+
+    // work_sys
+    GS_LOAD(system_timer);
 }

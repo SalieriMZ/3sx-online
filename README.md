@@ -7,7 +7,7 @@
 
 A **community-built online layer** for *Street Fighter III: 3rd Strike* — rollback netcode + cross-region matchmaking + custom rooms + ELO, on top of the [crowded-street/3sx](https://github.com/crowded-street/3sx) native decompilation.
 
-Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Android** (phones + tablets + Android TV), and **PlayStation Vita**. PC ↔ Vita ↔ Android cross-play confirmed working on real hardware.
+Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Android** (phones + tablets + Android TV), and **PlayStation Vita**. PC ↔ Android cross-play confirmed working on real hardware. The engine runs on Vita too, but the native online UI introduced in 1.8.0 is **untested there** — see the Vita notes below.
 
 > **Independent community project.** We are not affiliated with [crowded-street](https://github.com/crowded-street/3sx) (the upstream decompilation) or with Capcom. Upstream focuses on the offline single-player experience; this fork is where the online + multi-platform work lives. Upstream improvements are ported here manually, so they can take a while to land in this fork. We ship engine code only — Capcom-owned assets remain Capcom's, you bring your own dump.
 
@@ -20,7 +20,7 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 - Brings **rollback netcode** (GekkoNet) to native 3rd Strike.
 - Pairs you with opponents across the world via a self-hostable matchmaking server.
 - Runs natively on hardware that the official builds don't target — Android phones, Android TV, and PlayStation Vita.
-- Treats Vita ↔ PC and Android ↔ PC matches as first-class — same protocol, same regions, same ELO pool.
+- Treats Android ↔ PC matches as first-class — same protocol, same regions, same ELO pool. (Vita uses the same engine + protocol; the new in-game online UI is untested there as of 1.8.0.)
 - Is **fully self-hostable**: bring up your own matchmaking server and your community owns the infrastructure.
 
 ---
@@ -37,7 +37,7 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 
 - GekkoNet rollback with prediction window + adaptive frame-skip on cross-region links.
 - Region picker with live ping (TCP RTT to the matchmaking host).
-- Login / register via in-game overlay (PC + Android use ImGui; Vita uses the native Sce IME dialog).
+- Login / register, region picker, ranked + casual matchmaking, and private rooms are all handled by a native in-game UI drawn with the SF3 sprite font on every platform. Text entry uses SDL3 text input + the soft keyboard on PC/Android and the Sce IME dialog on Vita. ImGui renders only the in-match chat box and the netstats/FPS overlay.
 - Quick match (casual / ranked) + custom rooms with shareable codes + chat + slot reservations.
 - LAN-direct fast-path: when both peers are behind the same NAT (e.g. same WiFi) the server detects the shared `/24` prefix and skips the relay.
 - Relay fallback for CGNAT / symmetric-NAT carriers (default-on for Android, off elsewhere).
@@ -68,10 +68,9 @@ Rough priority order — no dates promised:
 2. **Multi-fight custom rooms** — SF6-style lobbies: up to 8 members, host picks the next two fighters, best-of-N on top of the scoreboard that shipped in 1.7.29.
 3. **Direct versus by IP** — play a friend with no matchmaking server at all. The netcode already supports it (`--p2p-local-player` / `--p2p-remote-ip`); it needs an in-game UI.
 4. **Replays + spectator mode** — record/watch matches; live spectating from a room.
-5. **PlayStation Vita release builds** — Vita is fully playable from source today; pre-built VPKs return in a follow-up release.
-6. **Android quality-of-life** — touch controls, lifecycle pause/resume polish, in-app updates.
-7. **In-game UI consolidation** — move flows into native game menus so we depend less on the ImGui overlay and remove the redundancy between the two.
-8. **If the project gains traction** — validated character/match stats, hardened netplay protocol, and anti-cheat measures so ranked stays trustworthy.
+5. **Vita native-online-UI parity** — the native login / region / matchmaking / rooms UI consolidated in 1.8.0 is untested on Vita; bring it up to parity and ship pre-built VPKs again.
+6. **Android quality-of-life** — touch controls, lifecycle pause/resume polish, and surfacing the in-game version check more prominently.
+7. **If the project gains traction** — validated character/match stats, hardened netplay protocol, and anti-cheat measures so ranked stays trustworthy.
 
 Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps improving the offline game; we port those changes manually, so they may take longer to arrive in this fork.
 
@@ -84,9 +83,9 @@ Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps impro
 ### Windows
 
 1. Download `3SX-x.y.z.zip` from the [Releases](https://github.com/SalieriMZ/3sx-online/releases) page.
-2. Extract anywhere, double-click `3SX.exe`. The launcher walks you through ISO → AFS conversion on first run.
+2. Extract anywhere and run `3sx.exe` directly — there is no separate launcher. On first run the game prompts for your own legally-dumped *3rd Strike* PS2 ISO and converts it to `SF33RD.AFS` in place.
 3. Drop a `regions.txt` next to `3sx.exe` so the region picker has somewhere to point — see [Configuring regions](#configuring-regions) below.
-4. Click *Launch Game*. The launcher checks the [GitHub releases](https://github.com/SalieriMZ/3sx-online/releases) page and prompts you when a newer build is out — game binaries are only ever downloaded from GitHub, never from the matchmaking host.
+4. Everything else happens in the native in-game UI: create an account or log in, pick a region, and choose ranked, casual, or a private room. The game checks for updates itself (it asks the matchmaking server for the latest version over TCP) and shows a popup when a newer build is out, with a link to the [GitHub releases](https://github.com/SalieriMZ/3sx-online/releases) page — binaries are only ever downloaded from GitHub.
 
 ### Android
 
@@ -97,6 +96,8 @@ Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps impro
 
 ### PlayStation Vita
 
+> **Untested with the native online UI introduced in 1.8.0** — the engine is playable on Vita, but the new in-game login / region / matchmaking / rooms UI has not been verified on real hardware for this release and may need fixes. Please report issues on [Discord](https://discord.gg/aume4RqnnP).
+
 Pre-reqs: an exploited Vita (HENkaku / h-encore² / Adrenaline / etc.), VitaShell installed, ~600 MB free on `ux0:`. The OFW does **not** install homebrew VPKs.
 
 1. Download `3sx.vpk` from the Releases page.
@@ -104,9 +105,9 @@ Pre-reqs: an exploited Vita (HENkaku / h-encore² / Adrenaline / etc.), VitaShel
 3. Open VitaShell, navigate to `ux0:VPK/3sx.vpk`, press `X`, confirm the install.
 4. Stage `SF33RD.AFS` at `ux0:data/3sx/resources/SF33RD.AFS` (Vita has no file picker; do this manually).
 5. Drop a `regions.txt` at `ux0:data/3sx/resources/regions.txt` (or `ux0:data/CrowdedStreet/3SX/regions.txt` for user overrides).
-6. Launch from the LiveArea bubble. First launch opens the in-game region picker + Sce IME login.
+6. Launch from the LiveArea bubble. First launch opens the in-game region picker + login.
    - **Region picker**: D-pad up/down, any face button to confirm.
-   - **Login / register**: the Sce IME dialog opens for username + password. Triangle or Start cancels.
+   - **Login / register**: text entry goes through the Sce IME dialog for username + password. Triangle or Start cancels.
    - Pick *Create new account* the first time — Login fails if the account doesn't exist yet.
 
 ### Configuring regions
@@ -117,7 +118,7 @@ Every client reads a `regions.txt` file at startup to populate the in-game regio
 # code|label|host|port
 us-east-1|US East|fistbump.example.com|19000
 sa-east-1|South America|fistbump-sa.example.com|19000
-local|Local|127.0.0.1|9000
+local|Local|127.0.0.1|19000
 ```
 
 The file is looked up in this order (first match wins):
@@ -142,15 +143,13 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 |---|---|---|
 | Matchmaking host + port | `regions.txt` (`code\|label\|host\|port` lines) | Up to 16 entries. The game pings each at startup and the in-game picker auto-selects the lowest-latency one. |
 | Discord Rich Presence app | `-DDISCORD_APP_ID=<id>` at cmake configure time | Register an app at <https://discord.com/developers/applications>. Omit the flag for an RPC-free build (presence is a no-op stub). |
-| Launcher update URL | `FISTBUMP_UPDATE_BASE_URL` env var when launching the launcher | Defaults to `http://<first-region-host>:20000`. Point at your stats/HTTP endpoint to enable auto-updates. Failures are silent — the launcher always lets the user click *Play*. |
-| Launcher region list (override) | `FISTBUMP_REGIONS="code\|label\|host\|port;..."` env var | Overrides the launcher's default region dropdown without touching `regions.txt` on the game side. |
-| Build version stamp | `-DBUILD_VERSION=1.7.29` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
+| Build version stamp | `-DBUILD_VERSION=1.8.0` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
 | Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
 | Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
 | Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
-For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.7.29` with `REGIONS_FILE=path/to/regions.txt` and `INCLUDE_LAUNCHER=path/to/3sx_launcher_online.exe` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
+For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.8.0` with `REGIONS_FILE=path/to/regions.txt` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
 ---
 
@@ -226,10 +225,10 @@ This prints version + git SHA + platform + build date + Discord App ID + whether
 To package a ready-to-share zip with the DLL closure pre-pruned, run:
 
 ```bash
-DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.7.29
+DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.8.0
 ```
 
-Output is at `dist/3sx-1.7.29-pc.zip`.
+Output is at `dist/3sx-1.8.0-pc.zip`.
 
 ### Android
 
@@ -273,7 +272,7 @@ Tested with NDK r26b on Linux + macOS + Windows hosts. Use a separate clone — 
 - **API level**: targets API 29 (Android 10). Override with `ANDROID_API=` if you need an older floor — deps will need to be re-built.
 - **Input**: there are no on-screen touch controls. A Bluetooth gamepad (or any HID gamepad over USB-C OTG) is required to play.
 - **Audio**: ADX music depends on the cross-compiled FFmpeg libs being present in `jniLibs/<abi>/`. `build.sh android` copies them automatically; if you're running `gradlew assembleDebug` directly you need to stage them yourself.
-- **Updates**: the Android build has no launcher / in-app update flow. New versions ship as new APKs.
+- **Updates**: the game's in-game version check tells you when a newer release is out (and links to GitHub), but it can't self-install on Android — new versions ship as new APKs you sideload yourself.
 
 ### PlayStation Vita
 
@@ -330,17 +329,20 @@ src/
   args.c, args.h          CLI + persisted netplay prefs.
   platform/
     app/sdl/              SDL3 app driver (window, input, frame pacing).
-    app/vita/             Vita-only login + region picker UI.
+    app/vita/             Vita-specific text-entry glue (Sce IME dialog).
     input/sdl/            SDL gamepad → SF3 io conversion.
     netplay/              GekkoNet adapter + fistbump TCP protocol client.
     video/sdl_gpu/        Desktop renderer (SDL_GPU).
     video/opengl/         OpenGL renderer (Vita via vitaGL, fallback PC).
   port/
+    sdl/online_ui.c       Native in-game online UI (login/region/match/rooms,
+                          SF3 sprite font) — shared across all platforms.
+    sdl/text_input.c      Cross-platform text entry (SDL3 IME / Sce IME).
     io/afs.c              AFS file reader with chunked async I/O.
     io/local_ip.c         Platform-specific LAN IP probe.
     creds.c               DPAPI / sandboxed-JSON / plaintext token storage.
     resources.c           SF33RD.AFS path resolver + ISO → AFS converter.
-  imgui/                  PC ImGui overlays (login, settings, chat).
+  imgui/                  ImGui overlays (in-match chat + netstats/FPS HUD).
   sf33rd/                 Decompiled SF3 game code (do not edit).
 
 android-project/          Gradle + Java shell + Android-specific resources.
@@ -354,7 +356,7 @@ build-ffmpeg-vita.sh      Custom Vita ffmpeg with adpcm_adx decoder.
 build.sh                  One-shot orchestrator: `bash build.sh <pc|android|vita>`.
 dist.sh                   Packager: `bash dist.sh <pc|android|vita> [version]`
                           produces dist/3sx-<version>-<target>.zip with DLL
-                          closure resolved + optional regions.txt + launcher.
+                          closure resolved + optional regions.txt.
 regions.example.txt       Annotated template for the runtime region list.
 ```
 
@@ -377,7 +379,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching strategy, style notes, te
 - [libcdio / libiso9660](https://github.com/libcdio/libcdio) — ISO parsing for the first-run AFS conversion flow.
 - [minizip-ng](https://github.com/zlib-ng/minizip-ng), [zlib](https://zlib.net) — compression.
 - [TF-PSA-Crypto](https://github.com/Mbed-TLS/TF-PSA-Crypto) — SHA256 checksums.
-- [Dear ImGui](https://github.com/ocornut/imgui) — desktop in-game overlays.
+- [Dear ImGui](https://github.com/ocornut/imgui) — in-match chat + netstats/FPS overlay.
 
 ## License
 

@@ -72,10 +72,7 @@
 #include "platform/netplay/fistbump.h"
 #include "platform/netplay/netplay.h"
 #include "port/sdl/netplay_screen.h"
-#if IMGUI
-#include "imgui/login_panel.h"
-#include "imgui/netplay_panel.h"
-#endif
+#include "port/sdl/online_ui.h"
 #include "sf33rd/Source/Game/menu/netplay_menu.h"
 #endif
 
@@ -3632,12 +3629,9 @@ void VS_Result(struct _TASK* task_ptr) {
     default:
 #if NETPLAY_ENABLED
         Netplay_HandleMenuExit();
-#if IMGUI
-        // Hide overlay-login + netplay panel when leaving VS_Result →
-        // main menu so neither sits on top of the title screen.
-        LoginPanel_Hide();
-        NetplayPanel_Hide();
-#endif
+        // Hide the native online UI when leaving VS_Result → main menu so it
+        // doesn't sit on top of the title screen.
+        OnlineUI_Hide();
 #endif
 
         if (Exit_Sub(task_ptr, 0, 0)) {

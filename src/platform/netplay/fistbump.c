@@ -16,9 +16,16 @@
 #include <string.h>
 #include <time.h>
 
-// 1.3.1 (release 1.7.28): platform tag on auth, full-length PROFILE
-// username, ROOM STATE scores token, per-game RESULT reports.
-#define FISTBUMP_CLIENT_VERSION "1.3.1"
+// 1.4.0 (release 1.8.0): native cross-platform online UI + in-game update
+// check. Protocol cut from 1.3.1 so the server (ALLOWED_VERSIONS = {1.4.0})
+// rejects every pre-1.8.0 client.
+#define FISTBUMP_CLIENT_VERSION "1.4.0"
+
+// Build/release version, stamped at compile time (see CMakeLists.txt). Compared
+// against the server's reported latest release for the in-game update check.
+#ifndef BUILD_VERSION
+#define BUILD_VERSION "dev"
+#endif
 
 static FistbumpState state = FISTBUMP_IDLE;
 static FistbumpConnectState connect_state = FISTBUMP_CONN_IDLE;
@@ -48,6 +55,17 @@ static bool in_room = false;
 // is "did the score change" rather than "did we ever send".
 static int result_sent_wins[2] = { -1, -1 };
 static char last_error[256] = { 0 };
+
+// Defined near the bottom of this file (netplay polls them). Forward-declared so
+// read_into_line_buf — which sits above their definition — can trip the in-match
+// cancel path when the TCP stream breaks.
+extern bool fistbump_peer_cancelled;
+
+// Handshake watchdog state (see Fistbump_Run): a waiting state that never
+// advances (dropped SYN, lost auth/START, unanswered punch) becomes a retryable
+// FISTBUMP_ERROR instead of hanging forever.
+static FistbumpState run_prev_state = FISTBUMP_IDLE;
+static Uint64 state_entered_ms = 0;
 
 static void SaveToken(const JWT* jwt) {
     if (base_path == NULL || jwt == NULL) {
@@ -148,9 +166,26 @@ static bool pop_line(char* out, int out_size) {
 }
 
 static void read_into_line_buf() {
+    // Only read once the TCP connection is actually ESTABLISHED. Before that
+    // (IDLE / mid-connect) and on the serverless paths (direct-P2P / synctest,
+    // where tcp_sock is NULL) NET_ReadFromStreamSocket legitimately returns < 0
+    // for "not connected yet" — so the n<0 disconnect detection below must NOT
+    // run there, or it false-errors every single connect attempt and floods the
+    // log. Real mid-session drops still surface: connect_state stays CONNECTED
+    // and the read then returns < 0 for a genuinely broken stream.
+    if (tcp_sock == NULL || connect_state != FISTBUMP_CONN_CONNECTED) {
+        return;
+    }
+
     int space = (int)sizeof(line_buf) - line_len - 1;
 
     if (space <= 0) {
+        // 1023 bytes with no newline. An honest server never emits a line this
+        // long (max ROOM STATE ~500 bytes), so this is only reachable via a
+        // hostile/buggy server — resync to avoid a permanent deadlock instead
+        // of silently dropping all further input.
+        Netplay_Log("FISTBUMP", "line buffer overflow, resyncing");
+        line_len = 0;
         return;
     }
 
@@ -158,6 +193,19 @@ static void read_into_line_buf() {
 
     if (n > 0) {
         line_len += n;
+    } else if (n < 0) {
+        // SDL3_net returns <0 for a closed/broken stream (never for would-block).
+        // The previous code ignored this, so a TCP RST during login / matched /
+        // in-match was invisible — the client kept reading 0 bytes forever. Now
+        // surface it: in a live match trip the peer-cancel path so netplay tears
+        // down; otherwise fail to a retryable error.
+        Netplay_Log("DISCONNECT", "tcp read error (n=%d) in state %d", n, (int)state);
+        if (state == FISTBUMP_GAME_START) {
+            fistbump_peer_cancelled = true;
+        } else if (state != FISTBUMP_IDLE && state != FISTBUMP_ERROR) {
+            SDL_strlcpy(last_error, "Connection to server lost.", sizeof(last_error));
+            state = FISTBUMP_ERROR;
+        }
     }
 }
 
@@ -409,6 +457,11 @@ void Fistbump_SendUDP() {
 }
 
 void Fistbump_AcceptMatch() {
+    // Guard symmetrically with DeclineMatch: never enter the UDP/handoff path
+    // with a torn-down socket or empty match (stale Accept).
+    if (tcp_sock == NULL || match_result.match_id[0] == '\0') {
+        return;
+    }
     Netplay_Log("MATCH", "accept id=%s", match_result.match_id);
     Fistbump_BeginUDP();
 }
@@ -494,9 +547,60 @@ float Fistbump_PingHost(const char* host, int tcp_port, float timeout_sec) {
     return ok ? (float)rtt_ms : -1.0f;
 }
 
+// Broker version reported in the SESSION line (empty if the server is older and
+// only sends the session id).
+static char server_version[16] = { 0 };
+
+// In-game update check: the newest release the server knows about + its GitHub
+// URL, learned via the pre-auth VERSION command (the client has no TLS to hit
+// api.github.com directly). Compared against BUILD_VERSION by the UI.
+static char latest_version[16] = { 0 };
+static char update_url[256] = { 0 };
+static bool update_checked = false;
+
+const char* Fistbump_GetServerVersion(void) {
+    return server_version;
+}
+
+bool Fistbump_UpdateChecked(void) {
+    return update_checked;
+}
+
+bool Fistbump_UpdateAvailable(void) {
+    return update_checked && latest_version[0] != '\0' &&
+           SDL_strcmp(latest_version, BUILD_VERSION) != 0;
+}
+
+const char* Fistbump_GetLatestVersion(void) {
+    return latest_version;
+}
+
+const char* Fistbump_GetUpdateURL(void) {
+    return update_url;
+}
+
+void Fistbump_HandleVERSION(const char* line) {
+    // VERSION latest <version> <url>
+    char kw[16] = { 0 };
+    latest_version[0] = '\0';
+    update_url[0] = '\0';
+    if (SDL_sscanf(line, "VERSION %15s %15s %255s", kw, latest_version, update_url) >= 2) {
+        update_checked = true;
+        Netplay_Log("UPDATE", "latest=%s url=%s (build=%s)", latest_version, update_url, BUILD_VERSION);
+    }
+}
+
 void Fistbump_HandleSESSION(const char* line) {
-    SDL_sscanf(line, "SESSION %7s", id_buf);
-    SDL_Log("Fistbump: received ID: %s\n", id_buf);
+    server_version[0] = '\0';
+    // SESSION <sid> [server_version] — the version token is optional + additive.
+    SDL_sscanf(line, "SESSION %7s %15s", id_buf, server_version);
+    SDL_Log("Fistbump: received ID: %s server=%s\n", id_buf, server_version);
+
+    // Pre-auth update check — ask the broker for the latest released version.
+    if (tcp_sock != NULL) {
+        static const char q[] = "VERSION\n";
+        NET_WriteToStreamSocket(tcp_sock, q, (int)(sizeof(q) - 1));
+    }
 
     state = FISTBUMP_SENDING_TOKEN;
 }
@@ -573,6 +677,11 @@ void Fistbump_HandleUDP(const char* line) {
 
     if (strcmp(res, "ok") == 0) {
         SDL_Log("Fistbump: UDP ok!\n");
+        // Our punch reached the server. Re-arm the SENDING_UDP watchdog so its
+        // deadline counts from here (waiting for the peer's punch + START),
+        // not from when we entered the state. State stays SENDING_UDP, so the
+        // run_prev_state auto-reset in Fistbump_Run won't fire — reset it here.
+        state_entered_ms = SDL_GetTicks();
     }
 }
 
@@ -634,6 +743,15 @@ void Fistbump_HandleMATCH(const char* line) {
 
     result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_MATCHED;
+
+    // In a private room both players already agreed by being slotted, and the
+    // host pressing "Start" is the confirmation — so skip the accept/decline
+    // screen and go straight into the match. Queue (ranked/casual) matches still
+    // show the accept/decline prompt.
+    if (Fistbump_GetRoom() != NULL) {
+        Netplay_Log("QUEUE", "room match — auto-accept (no accept/decline)");
+        Fistbump_AcceptMatch();
+    }
 }
 
 void Fistbump_HandleCHAT(const char* line) {
@@ -766,6 +884,8 @@ static void Fistbump_HandleREJECT(const char* line) {
 void Fistbump_ParseCommand(const char* line) {
     if (strncmp(line, "SESSION ", 8) == 0) {
         Fistbump_HandleSESSION(line);
+    } else if (strncmp(line, "VERSION ", 8) == 0) {
+        Fistbump_HandleVERSION(line);
     } else if (strncmp(line, "DAG ", 4) == 0) {
         Fistbump_HandleDAG(line);
     } else if (strncmp(line, "UDP ", 4) == 0) {
@@ -941,6 +1061,29 @@ const Fistbump_Room* Fistbump_GetRoom(void) {
     return in_room ? &current_room : NULL;
 }
 
+// Per-waiting-state watchdog timeout in ms (0 = wait indefinitely).
+// FISTBUMP_AWAITING_MATCH is the matchmaking queue — it can legitimately take
+// minutes, so it is exempt; GAME_START/IDLE/ERROR/AWAITING_CREDENTIALS are not
+// waits on the server.
+static Uint64 fistbump_state_timeout_ms(FistbumpState s) {
+    switch (s) {
+    case FISTBUMP_CONNECTING:      return 10000; // DNS + TCP connect
+    case FISTBUMP_SENDING_TOKEN:
+    case FISTBUMP_LOGGING_IN:
+    case FISTBUMP_AWAITING_LOGIN:  return 10000; // auth round-trip
+    case FISTBUMP_MATCHED:         return 30000; // post-match handshake (+ accept UX)
+    // The server gives BOTH peers ~20s from match creation to punch before it
+    // dispatches START (and CANCELs if they don't). The client budget MUST stay
+    // above that window, or the faster-accepting peer self-aborts while still
+    // legitimately waiting for the slower peer's punch + START. Kept as a
+    // backstop for a dead server only; the server CANCEL is the real authority.
+    // (Re-armed on the "UDP ok" ack — see Fistbump_HandleUDP — so the window
+    // counts from a successful punch, not from local accept.)
+    case FISTBUMP_SENDING_UDP:     return 25000;
+    default:                       return 0;
+    }
+}
+
 void Fistbump_Run() {
     char tmp[1024];
 
@@ -948,6 +1091,25 @@ void Fistbump_Run() {
 
     while (pop_line(tmp, sizeof(tmp))) {
         Fistbump_ParseCommand(tmp);
+    }
+
+    // Handshake watchdog: stamp the time on each state change, and fail a
+    // waiting state that overstays its budget so a flaky link surfaces a
+    // retryable error instead of bricking the session (the deadline pattern
+    // already lived in Fistbump_PingHost; this applies it to the live path).
+    if (state != run_prev_state) {
+        run_prev_state = state;
+        state_entered_ms = SDL_GetTicks();
+    } else {
+        const Uint64 budget = fistbump_state_timeout_ms(state);
+        if (budget != 0 && (SDL_GetTicks() - state_entered_ms) > budget) {
+            Netplay_Log("TIMEOUT", "state %d exceeded %llu ms", (int)state,
+                        (unsigned long long)budget);
+            SDL_strlcpy(last_error, "Server did not respond in time.", sizeof(last_error));
+            state = FISTBUMP_ERROR;
+            run_prev_state = state;
+            return;
+        }
     }
 
     switch (state) {
@@ -979,6 +1141,27 @@ void Fistbump_Run() {
 
 FistbumpState Fistbump_GetState() {
     return state;
+}
+
+// Single source of truth for "the UI must pump Fistbump_Run this frame" —
+// during login/connect, and ALWAYS while in a room (continuous ROOM STATE
+// reads + command flushes). The PC (login_panel) and Vita (vita_login) ticks
+// both call this so their pump-state lists can never drift; a past divergence
+// here starved the TCP socket and caused the ~30s CANCEL hang.
+bool Fistbump_WantsPump(void) {
+    if (Fistbump_GetRoom() != NULL) {
+        return true;
+    }
+    switch (state) {
+    case FISTBUMP_CONNECTING:
+    case FISTBUMP_SENDING_TOKEN:
+    case FISTBUMP_LOGGING_IN:
+    case FISTBUMP_AWAITING_LOGIN:
+    case FISTBUMP_AWAITING_CREDENTIALS:
+        return true;
+    default:
+        return false;
+    }
 }
 
 FistbumpConnectState Fistbump_GetConnectState() {

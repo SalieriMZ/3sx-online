@@ -36,15 +36,13 @@
 #include "imgui/imgui_wrapper.h"
 #include "imgui/settings_panel.h"
 #include "imgui/chat_panel.h"
-#if NETPLAY_ENABLED
-#include "imgui/login_panel.h"
-#endif
 #include "imgui/dcimgui/dcimgui.h"
 #endif
 
-#if defined(__vita__) && NETPLAY_ENABLED
-#include "platform/app/vita/vita_login.h"
-#endif
+// Native cross-platform online UI (replaces the ImGui login/netplay panels and
+// the old Vita login). Self-stubs when NETPLAY_ENABLED is off.
+#include "port/sdl/online_ui.h"
+#include "port/sdl/text_input.h"
 
 #if STATCHECK
 #include "test/test_runner.h"
@@ -268,9 +266,7 @@ static int full_init() {
             Netplay_SetMatchmakingParams(persisted->ip, persisted->port);
         }
     }
-#ifdef __vita__
-    VitaLogin_Init();
-#endif
+    OnlineUI_Init(window);
 #endif
 
     return 0;
@@ -299,7 +295,9 @@ static void toggle_settings_panel(SDL_KeyboardEvent* event) {
 
 static void toggle_chat_panel(SDL_KeyboardEvent* event) {
     if (event->key == SDLK_TAB && event->down && !event->repeat) {
-        if (!ImGui_GetIO()->WantTextInput) {
+        // Don't open chat while a native online-UI text field owns the keyboard
+        // (room name/code) — they'd both capture the same keystrokes.
+        if (!ImGui_GetIO()->WantTextInput && !TextInput_IsActive()) {
             ChatPanel_Toggle();
         }
     }
@@ -361,8 +359,21 @@ static bool poll_events() {
             toggle_settings_panel(&event.key);
             toggle_chat_panel(&event.key);
 #endif
-
+            // Backspace/Enter/Escape for the native online UI text field — but
+            // not while ImGui (chat) owns the keyboard, else both capture it.
+#if IMGUI
+            if (!ImGui_GetIO()->WantTextInput)
+#endif
+                OnlineUI_HandleSDLEvent(&event);
             handle_fullscreen_toggle(&event.key);
+            break;
+
+        case SDL_EVENT_TEXT_INPUT:
+            // Typed characters for the native online UI text field (SDL path).
+#if IMGUI
+            if (!ImGui_GetIO()->WantTextInput)
+#endif
+                OnlineUI_HandleSDLEvent(&event);
             break;
 
         case SDL_EVENT_MOUSE_MOTION:
@@ -529,9 +540,7 @@ static void end_frame() {
     // because NetstatsRenderer uses the existing SFIII rendering pipeline
     NetplayScreen_Render();
     NetstatsRenderer_Render();
-#if defined(__vita__)
-    VitaLogin_Render();
-#endif
+    OnlineUI_Render();
 #endif
 
 #if DEBUG
@@ -677,11 +686,7 @@ static int loop() {
             begin_frame();
             Main_StepFrame();
 #if NETPLAY_ENABLED
-#if IMGUI
-            LoginPanel_Tick();
-#elif defined(__vita__)
-            VitaLogin_Tick();
-#endif
+            OnlineUI_Tick();
             Netplay_TickMatchmaking();
             Netplay_TickDirectP2P();
             Netplay_Run();
@@ -715,7 +720,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     // Verbose SDL logs so we can see backend selection / device creation
-    // failures via adb logcat. Remove once Android builds are stable.
+    // failures via adb logcat.
     SDL_SetLogPriorities(SDL_LOG_PRIORITY_VERBOSE);
     int n = SDL_GetNumGPUDrivers();
     SDL_Log("SDL_GPU drivers available: %d", n);
