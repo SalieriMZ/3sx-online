@@ -43,13 +43,23 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: bash build-deps-android.sh
 
-      - name: Build APK
-        working-directory: android-project
+      - name: Build native libs + APK
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        # build.sh android compiles lib3sx.so and stages it (+ libSDL3.so,
+        # ffmpeg, libc++_shared.so) into jniLibs BEFORE running gradlew. Calling
+        # gradlew directly (as this step did before) packaged an APK with NO
+        # native libraries — a green build that shipped a non-functional APK.
+        run: bash build.sh android
+
+      - name: Verify APK contains the game native library
         run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+          for apk in android-project/app/build/outputs/apk/debug/*.apk; do
+            if ! unzip -l "$apk" | grep -iE "lib/.*/lib3sx\.so"; then
+              echo "FAIL: lib3sx.so missing from $apk — native build did not stage into the APK."
+              exit 1
+            fi
+          done
 
       - name: Verify APK ships engine only (no Capcom AFS bundled)
         run: |

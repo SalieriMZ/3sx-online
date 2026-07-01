@@ -149,6 +149,14 @@ case "$TARGET" in
         [ -f "$APK" ] || { echo "APK not found at $APK" >&2; exit 1; }
         cp -v "$APK" "$STAGE/3sx-$VERSION-debug.apk"
 
+        # Legal guard (mirrors CI): never ship an artifact containing Capcom's
+        # SF33RD.AFS. The user stages it locally for personal builds, so verify
+        # the packaged APK is AFS-free before zipping.
+        if python -c "import zipfile,sys; print('\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))" "$STAGE/3sx-$VERSION-debug.apk" | grep -iqE 'SF33RD\.AFS'; then
+            echo "FATAL: SF33RD.AFS found inside the APK — refusing to package" >&2
+            exit 1
+        fi
+
         # If an install-and-run.bat is present in the project, include a copy
         # so sideloading is one click. Shaders/AFS staging stays the user's job.
         if [ -f "$HERE/android-project/install-and-run.bat" ]; then
@@ -158,9 +166,19 @@ case "$TARGET" in
         ;;
 
     vita)
+        # DEPRECATED: Vita is excluded from official releases as of 1.8.1
+        # (untested online UI). This packages an unsupported, source-built VPK.
+        echo "WARN: Vita is DEPRECATED / excluded from releases — unsupported VPK." >&2
         VPK="$HERE/build-vita/3sx.vpk"
         [ -f "$VPK" ] || { echo "VPK not found at $VPK" >&2; exit 1; }
         cp -v "$VPK" "$STAGE/3sx-$VERSION.vpk"
+        # Legal guard (mirrors CI): never ship a VPK containing Capcom's
+        # SF33RD.AFS (the "bundle into vita/resources" shortcut is personal-use
+        # only). Verify the packaged VPK is AFS-free before zipping.
+        if python -c "import zipfile,sys; print('\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))" "$STAGE/3sx-$VERSION.vpk" | grep -iqE 'SF33RD\.AFS'; then
+            echo "FATAL: SF33RD.AFS found inside the VPK — refusing to package" >&2
+            exit 1
+        fi
         # On Vita the user pre-stages everything under ux0:data/3sx/ so regions
         # are dropped via the file manager, not bundled in the VPK.
         ;;

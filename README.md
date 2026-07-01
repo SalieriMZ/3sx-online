@@ -7,7 +7,7 @@
 
 A **community-built online layer** for *Street Fighter III: 3rd Strike* — rollback netcode + cross-region matchmaking + custom rooms + ELO, on top of the [crowded-street/3sx](https://github.com/crowded-street/3sx) native decompilation.
 
-Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Android** (phones + tablets + Android TV), and **PlayStation Vita**. PC ↔ Android cross-play confirmed working on real hardware. The engine runs on Vita too, but the native online UI introduced in 1.8.0 is **untested there** — see the Vita notes below.
+Builds from a single source tree for **Windows**, **macOS**, **Linux**, and **Android** (phones + tablets + Android TV). PC ↔ Android cross-play confirmed working on real hardware. The engine also builds for **PlayStation Vita** from source, but Vita is **excluded from the 1.8.1 release and unsupported** — the native online UI introduced in 1.8.0 is unverified on real hardware — see the Vita notes below.
 
 > **Independent community project.** We are not affiliated with [crowded-street](https://github.com/crowded-street/3sx) (the upstream decompilation) or with Capcom. Upstream focuses on the offline single-player experience; this fork is where the online + multi-platform work lives. Upstream improvements are ported here manually, so they can take a while to land in this fork. We ship engine code only — Capcom-owned assets remain Capcom's, you bring your own dump.
 
@@ -19,8 +19,8 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 
 - Brings **rollback netcode** (GekkoNet) to native 3rd Strike.
 - Pairs you with opponents across the world via a self-hostable matchmaking server.
-- Runs natively on hardware that the official builds don't target — Android phones, Android TV, and PlayStation Vita.
-- Treats Android ↔ PC matches as first-class — same protocol, same regions, same ELO pool. (Vita uses the same engine + protocol; the new in-game online UI is untested there as of 1.8.0.)
+- Runs natively on hardware that the official builds don't target — Android phones and Android TV. (PlayStation Vita builds from source but is unsupported / excluded from releases as of 1.8.1.)
+- Treats Android ↔ PC matches as first-class — same protocol, same regions, same ELO pool.
 - Is **fully self-hostable**: bring up your own matchmaking server and your community owns the infrastructure.
 
 ---
@@ -49,7 +49,7 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, **Androi
 
 ## Project status — read before playing
 
-This is an early public release, play-tested by a small community. The core loop — log in, find a match, play with rollback — is solid across PC, Android, and Vita, but **some flows are still rough and some features are unfinished**. Things you may run into:
+This is an early public release, play-tested by a small community. The core loop — log in, find a match, play with rollback — is solid across PC and Android (**Vita is unsupported and excluded from this release** — see the Vita notes below), but **some flows are still rough and some features are unfinished**. Things you may run into:
 
 - **Room scoreboard under-counts in-game rematch series** — when both players pick REMATCH on the result screen and keep playing, the room scoreboard currently credits only the first game of the series. Win-by-win crediting is being worked on; re-starting matches from the lobby counts every match correctly.
 - **Stat tracker / ELO / ranks are early** — the [community leaderboard](https://sf3-leaderboard.chambeadores.cl/) is live so you can see who's playing, but the rating system is young: expect inconsistencies, and possibly a reset before rankings become meaningful.
@@ -96,11 +96,11 @@ Upstream [crowded-street/3sx](https://github.com/crowded-street/3sx) keeps impro
 
 ### PlayStation Vita
 
-> **Untested with the native online UI introduced in 1.8.0** — the engine is playable on Vita, but the new in-game login / region / matchmaking / rooms UI has not been verified on real hardware for this release and may need fixes. Please report issues on [Discord](https://discord.gg/aume4RqnnP).
+> **⚠️ Vita is excluded from the 1.8.1 release and unsupported.** The native in-game online UI introduced in 1.8.0 has not been verified on real Vita hardware, Vita is no longer built in CI, and **no pre-built `3sx.vpk` is published on the Releases page**. The Vita source + build scripts remain in the tree, so you can still compile a VPK yourself (see the *PlayStation Vita* build-from-source section below), but it is provided as-is with no support. Restoring first-class Vita support with shipped VPKs is tracked on the roadmap. Report Vita issues on [Discord](https://discord.gg/aume4RqnnP).
 
 Pre-reqs: an exploited Vita (HENkaku / h-encore² / Adrenaline / etc.), VitaShell installed, ~600 MB free on `ux0:`. The OFW does **not** install homebrew VPKs.
 
-1. Download `3sx.vpk` from the Releases page.
+1. **No pre-built VPK ships for 1.8.1** — compile `3sx.vpk` yourself from source (see the *PlayStation Vita* build-from-source section below), then continue with the steps here.
 2. Copy it to `ux0:VPK/3sx.vpk` (USB / FTP / wireless via VitaShell — any transport).
 3. Open VitaShell, navigate to `ux0:VPK/3sx.vpk`, press `X`, confirm the install.
 4. Stage `SF33RD.AFS` at `ux0:data/3sx/resources/SF33RD.AFS` (Vita has no file picker; do this manually).
@@ -143,13 +143,13 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 |---|---|---|
 | Matchmaking host + port | `regions.txt` (`code\|label\|host\|port` lines) | Up to 16 entries. The game pings each at startup and the in-game picker auto-selects the lowest-latency one. |
 | Discord Rich Presence app | `-DDISCORD_APP_ID=<id>` at cmake configure time | Register an app at <https://discord.com/developers/applications>. Omit the flag for an RPC-free build (presence is a no-op stub). |
-| Build version stamp | `-DBUILD_VERSION=1.8.0` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
+| Build version stamp | `-DBUILD_VERSION=1.8.1` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
 | Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
 | Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
 | Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
-For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.8.0` with `REGIONS_FILE=path/to/regions.txt` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
+For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.8.1` with `REGIONS_FILE=path/to/regions.txt` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.
 
 ---
 
@@ -225,10 +225,10 @@ This prints version + git SHA + platform + build date + Discord App ID + whether
 To package a ready-to-share zip with the DLL closure pre-pruned, run:
 
 ```bash
-DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.8.0
+DISCORD_APP_ID=<id> REGIONS_FILE=path/to/regions.txt bash dist.sh pc 1.8.1
 ```
 
-Output is at `dist/3sx-1.8.0-pc.zip`.
+Output is at `dist/3sx-1.8.1-pc.zip`.
 
 ### Android
 
@@ -276,6 +276,8 @@ Tested with NDK r26b on Linux + macOS + Windows hosts. Use a separate clone — 
 
 ### PlayStation Vita
 
+> **Deprecated / unsupported (excluded from the 1.8.1 release).** Vita is not built in CI and ships no pre-built VPK; these instructions are kept for source builders only, provided as-is. The 1.8.0 native online UI is unverified on real hardware.
+
 Uses the vitasdk toolchain. The simplest path is the official Docker image, so contributors don't need a host install.
 
 1. Install Docker Desktop (or the equivalent on Linux).
@@ -317,7 +319,7 @@ Vanilla clang + cmake + ninja toolchains. Run `bash build-deps.sh` then `bash bu
 
 ### Continuous integration
 
-`.github/workflows/` builds every target on every push. The PSP and macOS builds run on push; Android, Vita, Windows, Linux, and PSP build matrices run on PR. Workflows fail upload if `SF33RD.AFS` ever ends up inside an artifact.
+`.github/workflows/` builds the shipped targets on every push/PR. **Vita and PSP are excluded** — their workflows are manual-trigger only (untested targets; see the Vita note above). The active matrix is Windows, macOS, Linux, and Android. Workflows fail upload if `SF33RD.AFS` ever ends up inside an artifact.
 
 ---
 

@@ -1,8 +1,9 @@
 name: Build (PSP)
 
+# PSP is an untested homebrew target, excluded from CI/releases (same rationale
+# as the Vita note in build_vita.yml). Manual trigger only.
 on:
-    pull_request:
-        branches: [ "main" ]
+    workflow_dispatch:
 
 jobs:
     build:

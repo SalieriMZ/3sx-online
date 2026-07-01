@@ -23,6 +23,9 @@ static bool init() {
     }
 
     SDLPad_Init();
+    // PSP-only AFS chunk budget. NOTE: this is NOT the Vita value — the Vita
+    // build runs the sdl_app.c path (64 KB under #ifdef __vita__). Tune the Vita
+    // throttle there, not here. (PSP is an inherited, unshipped target.)
     AFS_Init(Resources_GetAFSPath(), 16 * 1024);
     PSPRenderer_Init();
     Main_Init();

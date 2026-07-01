@@ -16,10 +16,11 @@
 #include <string.h>
 #include <time.h>
 
-// 1.4.0 (release 1.8.0): native cross-platform online UI + in-game update
-// check. Protocol cut from 1.3.1 so the server (ALLOWED_VERSIONS = {1.4.0})
-// rejects every pre-1.8.0 client.
-#define FISTBUMP_CLIENT_VERSION "1.4.0"
+// 1.4.1 (release 1.8.1): rollback determinism fixes (round-transition +
+// throw/parry save-state completeness, monotonic AFS load queue, char-select
+// stutter). Protocol cut from 1.4.0 so the server (ALLOWED_VERSIONS = {1.4.1})
+// rejects every 1.8.0 client — a 1.8.0 peer would desync against 1.8.1.
+#define FISTBUMP_CLIENT_VERSION "1.4.1"
 
 // Build/release version, stamped at compile time (see CMakeLists.txt). Compared
 // against the server's reported latest release for the in-game update check.

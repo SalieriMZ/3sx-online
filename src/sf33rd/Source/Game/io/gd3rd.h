@@ -26,15 +26,18 @@ u8 Check_LDREQ_Break();
 s32 Get_LDREQ_Depth(void);
 void Push_LDREQ_Queue_Player(s16 id, s16 ix);
 
-// Rollback snapshot of the AFS load-request queue family. The simulation reads
-// the queue's drain state at round/continue boundaries (Check_LDREQ_Clear /
-// Check_LDREQ_Queue_Player), but the netplay AFS pump also drains it out-of-band
-// on per-peer wall-clock timing — so it must roll back atomically with the sim
-// or the peers diverge at round transitions (and Check_LDREQ_Clear can
-// fatal_error). The live AFS file handle is deliberately NOT snapshotted: it is
-// real-time I/O, self-corrected by fsOpen's reopen, and is not a determinism
-// gate (the sim consults the result flags / queue occupancy below, not the
-// handle).
+// OPTIONAL rollback snapshot of the AFS load-request queue family, used only
+// when FISTBUMP_SAVE_LDREQ=1 (OFF by default). The simulation reads the queue's
+// drain state at round/continue boundaries (Check_LDREQ_Clear /
+// Check_LDREQ_Queue_Player) and the netplay AFS pump also drains it out-of-band
+// on per-peer wall-clock timing. The SHIPPED default keeps the queue MONOTONIC
+// (never rolled back, and excluded from the checksum — see netplay.c) so a
+// rollback cannot re-issue a completed load; round-transition convergence is
+// handled by save-state completeness instead. Snapshot/Restore exist purely for
+// A/B measurement of the rolled-back path (which reintroduces the 1.8.0 reload
+// bug). The live AFS file handle is deliberately NOT snapshotted: it is real-time
+// I/O, self-corrected by fsOpen's reopen, and is not a determinism gate (the sim
+// consults the result flags / queue occupancy below, not the handle).
 typedef struct LDREQ_Snapshot_t {
     REQ q_ldreq[16];
     u8 ldreq_result[294];

@@ -230,7 +230,10 @@ static int full_init() {
     // Smaller chunk on Vita so AFS_OnSyncTick fires often enough to keep TCP drained.
     AFS_Init(Resources_GetAFSPath(), 64 * 1024);
 #else
-    AFS_Init(Resources_GetAFSPath(), 256 * 1024);
+    // PC/Android: large chunk so a multi-MB character file streams in ~1 frame from
+    // an SSD instead of being rationed at 256 KB/frame over ~12-15 frames (the old
+    // Vita-era cap leaking onto PC — the char-select stutter). An 8 MB read is sub-ms.
+    AFS_Init(Resources_GetAFSPath(), 8 * 1024 * 1024);
 #endif
 
 #if DEBUG

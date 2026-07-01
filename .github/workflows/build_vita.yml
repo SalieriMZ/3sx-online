@@ -1,10 +1,10 @@
 name: Build (Vita)
 
+# Vita is DEPRECATED / excluded from releases (1.8.1+) due to lack of testing:
+# the native online UI introduced in 1.8.0 is unverified on real Vita hardware.
+# This build-check no longer runs automatically — trigger it manually if you
+# build Vita from source. See README.md "PlayStation Vita".
 on:
-  pull_request:
-    branches: [ "main" ]
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:

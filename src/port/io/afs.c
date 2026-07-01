@@ -221,6 +221,16 @@ static void read_into_request(ReadRequest* request, size_t max_read) {
 
     if (request->bytes_to_read == 0) {
         request->state = AFS_READ_STATE_FINISHED;
+    } else if (bytes_to_read > 0 && bytes_read == 0) {
+        // Asked for >0 bytes but got 0: truncated/corrupt AFS or an IO error.
+        // Flag ERROR instead of spinning AFS_READ_STATE_READING forever here.
+        // (max_read can legitimately throttle the chunk to 0; that is not an
+        // error, hence the bytes_to_read > 0 guard.) Mirrors AFS_ReadSync's
+        // synchronous guard. NOTE: the async/LDREQ layer currently treats
+        // AFS_READ_STATE_ERROR like READING (gd3rd.c fsCheckCommandExecuting),
+        // so on genuinely corrupt AFS the higher-level load can still retry —
+        // this bounds the per-read spin, not the queue-level retry.
+        request->state = AFS_READ_STATE_ERROR;
     }
 }
 

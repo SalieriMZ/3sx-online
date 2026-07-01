@@ -52,11 +52,11 @@
 // 3 frames = ~50 ms one-way buffer, absorbs ~100 ms RTT before rollback fires.
 // SF3 parry is 1-frame so we still keep the floor as low as is workable.
 #define DELAY_FRAMES 3
-// Lowered from 10: a smaller prediction window means a late packet causes a
-// short stall instead of a deep (8-10 frame) rollback that re-executes the
-// whole sim — fewer frames re-run = less exposure to any residual unsaved
-// state and a smaller visual hitch. 8 still absorbs ~130ms of jitter at 60fps.
-#define INPUT_PREDICTION_WINDOW 8
+// Prediction/jitter budget in frames (~165ms at 60fps). Kept at 10 (the
+// long-standing value): a load-induced pause or a late packet can briefly push
+// frames_behind several frames, and the window has to absorb that without an
+// unrecoverable overrun. Do not shrink this while loads can stall the sim.
+#define INPUT_PREDICTION_WINDOW 10
 #define PLAYER_COUNT 2
 
 // Desync detection: GekkoNet checksum exchange + the per-frame full-state djb2
@@ -103,10 +103,20 @@ static bool synctest_active = false;
 static int synctest_check_distance = 0;
 static int synctest_handles[2] = { 0, 0 };
 
-// Roll the AFS load-request queue family (q_ldreq) back with the sim. ON by
-// default — it is the fix for the round-transition desync. Set FISTBUMP_SAVE_LDREQ=0
-// to reproduce the old bug (useful for A/B-validating the fix under synctest).
-static bool save_ldreq_enabled = true;
+// Roll the AFS load-request queue family (q_ldreq) back with the sim. OFF by
+// default, and OFF is the fix: with the queue monotonic (the pre-1.8.0 behavior)
+// a rollback never re-issues an already-completed load. Turning it ON re-creates
+// the 1.8.0 mid-match reload storm + desync. Round/continue-transition desync is
+// fixed instead by save-state completeness (ca_check_flag / sa_gauge_flash /
+// chainex_check now live in GameState), NOT by rolling the queue back.
+//
+// A general "freeze the sim while afs_io_in_progress" was tried and REVERTED
+// (commit 0997e9a): the match-start load runs in the STEPPED sim (Game_Task),
+// so freezing it deadlocks at a black screen. Do NOT re-add it — see the note at
+// run_netplay's synctest gate. Only the PEER's blocking load is paused, via
+// fistbump_peer_loading. FISTBUMP_SAVE_LDREQ=1 rolls the queue back for A/B
+// MEASUREMENT ONLY (it reintroduces the reload bug by construction); never ship.
+static bool save_ldreq_enabled = false;
 
 // Actual local input delay used this match (frames). Chosen per-match in
 // configure_gekko (relay-aware, env-overridable) instead of a hardcoded
@@ -288,8 +298,10 @@ static void configure_gekko() {
     }
 
     {
+        // Default OFF (monotonic queue). FISTBUMP_SAVE_LDREQ=1 rolls the queue
+        // back with the sim again (the 1.8.0 behavior) for A/B testing only.
         const char* sl = SDL_getenv("FISTBUMP_SAVE_LDREQ");
-        save_ldreq_enabled = !(sl != NULL && sl[0] == '0');
+        save_ldreq_enabled = (sl != NULL && sl[0] == '1');
     }
 
     {
@@ -518,15 +530,15 @@ static void clean_state_pointers(State* state) {
         state->gs.task[i].func_adrs = NULL;
     }
 
-    // The q_ldreq load-queue snapshot rolls back with the sim (gather/load_state)
-    // so the queue can't overflow across rollbacks — but its exact bytes are
-    // real-time AFS I/O bookkeeping (load progress / completion flags / retry /
-    // read byte-counts + raw result/lds pointers) that the netplay pump mutates
-    // OUT OF BAND on wall-clock. That is NOT deterministic sim state — the loaded
-    // RESULT lands in GameState (which IS checksummed) and load timing is
-    // synchronized by the LOADING pause. So exclude the whole snapshot from the
-    // cross-peer checksum; otherwise an in-flight load reads as a false desync
-    // (confirmed via the synctest: gs/es matched, only ldcs diverged).
+    // Exclude the q_ldreq load-queue snapshot from the cross-peer checksum. By
+    // default the queue is NOT rolled back at all (save_ldreq off, monotonic) so
+    // a rollback never re-issues a completed load, and the loaded RESULT lands in
+    // GameState (which IS checksummed). These bytes are real-time AFS bookkeeping
+    // (progress / completion / retry / byte-counts + raw result/lds pointers) the
+    // netplay pump mutates out of band on wall-clock, so even with
+    // FISTBUMP_SAVE_LDREQ=1 (queue rolled back for A/B) they must stay out of the
+    // checksum or an in-flight load reads as a false desync (confirmed via the
+    // synctest: gs/es matched, only ldcs diverged).
     SDL_zero(state->ld);
 }
 
@@ -576,9 +588,12 @@ static void gather_state(State* dst) {
     es->frwctr = frwctr;
     es->frwctr_min = frwctr_min;
 
-    // Load-request queue — rolls back with the sim so round/continue
-    // transitions converge across peers (see gd3rd.h / rollback-determinism.md).
-    // FISTBUMP_SAVE_LDREQ=0 leaves it zeroed (pre-fix behaviour) for A/B testing.
+    // Load-request queue. Default (save_ldreq off) = MONOTONIC: leave dst->ld
+    // zeroed so the queue is not rolled back — this is the fix (a rollback never
+    // re-issues a completed load; round/continue convergence comes from
+    // save-state completeness instead). FISTBUMP_SAVE_LDREQ=1 snapshots it so it
+    // rolls back with the sim, which reintroduces the 1.8.0 reload storm — A/B
+    // measurement only (see save_ldreq_enabled at the top of this file).
     if (save_ldreq_enabled) {
         LDREQ_Snapshot(&dst->ld);
     } else {
@@ -678,8 +693,9 @@ static void load_state(const State* src) {
     frwctr = es->frwctr;
     frwctr_min = es->frwctr_min;
 
-    // Load-request queue (see gather_state). Restored only when enabled; with
-    // FISTBUMP_SAVE_LDREQ=0 the live queue is left untouched (pre-fix behaviour).
+    // Load-request queue (see gather_state). Restored only when save_ldreq is
+    // ON; the default (OFF, monotonic = the fix) leaves the live queue untouched
+    // so a rollback never re-issues a completed load.
     if (save_ldreq_enabled) {
         LDREQ_Restore(&src->ld);
     }
@@ -917,13 +933,16 @@ static void run_netplay() {
         return;
     }
 
-    // Synctest has no peer to gate on, but must still mimic the LOADING pause:
-    // never let the stress session advance / roll back while an AFS load is in
-    // flight. Real netplay pauses BOTH peers until loads finish (so a rollback
-    // never re-executes over out-of-band, wall-clock load progress) — without
-    // this the single-machine synctest false-desyncs on the effect pool during
-    // the character load (confirmed: the es sub-checksum diverges only at
-    // ld>0 / afs=1 frames). The AFS pump above keeps the load completing.
+    // Synctest only: never let the stress session advance / roll back while an
+    // AFS load is in flight (single machine, no peer to gate on).
+    //
+    // We do NOT do this in real netplay: a general "freeze the sim while
+    // afs_io_in_progress" deadlocks the match-start / round-transition load,
+    // because that load is driven by the STEPPED sim (Game_Task), not only the
+    // out-of-band pump above — freezing the sim stalls it forever (black screen
+    // at match start). Real netplay keeps the load queue MONOTONIC instead
+    // (save_ldreq off, the pre-1.8.0 behavior) so a rollback never re-issues it,
+    // and only pauses on the PEER's big blocking load via fistbump_peer_loading.
     if (synctest_active && afs_io_in_progress) {
         update_network_stats();
         return;

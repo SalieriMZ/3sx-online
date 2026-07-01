@@ -167,6 +167,7 @@ typedef struct GameState {
     s8 Turn_Over_Timer[2];
     s8 Jump_Pass_Timer[2][4];
     s8 sa_gauge_flash[2];
+    u8 chainex_check[2][36]; // EX/SA chain-cancel move-legality (sysdir.c) — must roll back
     s8 Receive_Flag[2];
     s8 Disposal_Again[2];
     s8 BGM_Vol;
@@ -505,6 +506,7 @@ typedef struct GameState {
     u8 sa_kind;
     u8 end_flag[2];
     s16 calc_hit[2][10];
+    s8 ca_check_flag; // throw/catch hit-check gate (hitcheck.c) — must roll back
     s16 score_calc[2][12];
     s8 cmb_all_stock[1];
     s8 sarts_finish_flag[2];

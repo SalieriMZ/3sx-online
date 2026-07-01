@@ -63,7 +63,7 @@ Clients pick a matchmaking host through a `regions.txt` file (see `regions.examp
 - Spin up a local fistbump (`python server.py --tcp-port 19000 --udp-port 19001 -v`), then point the **game** at it by adding a `regions.txt` line `local|Local|127.0.0.1|19000` where the client reads it. Exercise REGISTER / LOGIN / QUEUE / MATCH. With `FISTBUMP_ALLOW_ANON=1` you can also drive the server with raw `nc` (see the server README + `docs/protocol.md`).
 - `test_room_e2e.py` in the server repo drives register → room → matches end-to-end (no game needed). Determinism work is validated with the in-client synctest (`FISTBUMP_SYNCTEST` — see `docs/rollback-determinism.md`), not a server test.
 
-CI runs the full PC + macOS + Android + Vita matrix on every PR. Don't merge with red CI unless you know exactly why it's failing.
+CI runs the PC + macOS + Linux + Android matrix on every PR. (Vita and PSP are excluded — manual-trigger only, untested targets.) Don't merge with red CI unless you know exactly why it's failing.
 
 ## Filing issues / PRs
 

@@ -5,12 +5,14 @@
 #include "sf33rd/Source/Game/effect/effb2.h"
 #include "sf33rd/Source/Game/effect/effb8.h"
 #include "sf33rd/Source/Game/engine/charset.h"
+#include "sf33rd/Source/Game/engine/hitcheck.h"
 #include "sf33rd/Source/Game/engine/plcnt.h"
 #include "sf33rd/Source/Game/engine/slowf.h"
 #include "sf33rd/Source/Game/engine/spgauge.h"
 #include "sf33rd/Source/Game/engine/workuser.h"
 #include "sf33rd/Source/Game/stage/bg_data.h"
 #include "sf33rd/Source/Game/stage/ta_sub.h"
+#include "sf33rd/Source/Game/system/sysdir.h"
 #include "sf33rd/Source/Game/system/work_sys.h"
 #include "sf33rd/Source/Game/ui/count.h"
 #include "sf33rd/Source/Game/ui/sc_sub.h"
@@ -173,7 +175,8 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(Turn_Over);
     GS_SAVE(Turn_Over_Timer);
     GS_SAVE(Jump_Pass_Timer);
-    //     GS_SAVE(sa_gauge_flash);
+    GS_SAVE(sa_gauge_flash); // SA trigger flag — consumed in the round-end super path; must roll back
+    GS_SAVE(chainex_check);  // EX/SA chain-cancel move-legality — persists across rounds
     GS_SAVE(Receive_Flag);
     GS_SAVE(Disposal_Again);
     //     GS_SAVE(BGM_Vol);
@@ -512,6 +515,7 @@ void GameState_Save(GameState* dst) {
     GS_SAVE(sa_kind);
     GS_SAVE(end_flag);
     GS_SAVE(calc_hit);
+    GS_SAVE(ca_check_flag);
     GS_SAVE(score_calc);
     GS_SAVE(cmb_all_stock);
     GS_SAVE(sarts_finish_flag);
@@ -803,7 +807,8 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(Turn_Over);
     GS_LOAD(Turn_Over_Timer);
     GS_LOAD(Jump_Pass_Timer);
-    //     GS_LOAD(sa_gauge_flash);
+    GS_LOAD(sa_gauge_flash);
+    GS_LOAD(chainex_check);
     GS_LOAD(Receive_Flag);
     GS_LOAD(Disposal_Again);
     //     GS_LOAD(BGM_Vol);
@@ -1142,6 +1147,7 @@ void GameState_Load(const GameState* src) {
     GS_LOAD(sa_kind);
     GS_LOAD(end_flag);
     GS_LOAD(calc_hit);
+    GS_LOAD(ca_check_flag);
     GS_LOAD(score_calc);
     GS_LOAD(cmb_all_stock);
     GS_LOAD(sarts_finish_flag);

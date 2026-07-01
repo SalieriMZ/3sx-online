@@ -85,7 +85,10 @@ case "$TARGET" in
         echo "==> done: $(ls -la app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1)"
         ;;
     vita)
-        echo "==> building Vita via docker ($JOBS jobs)"
+        # DEPRECATED: Vita is excluded from CI + releases as of 1.8.1 (the 1.8.0
+        # native online UI is unverified on real hardware). Source build only,
+        # unsupported, no shipped VPK. See README.md "PlayStation Vita".
+        echo "==> [DEPRECATED/UNSUPPORTED] building Vita from source ($JOBS jobs)"
         if ! command -v docker >/dev/null 2>&1; then
             echo "docker required for Vita builds" >&2
             exit 1
