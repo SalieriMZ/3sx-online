@@ -293,7 +293,11 @@ void Main_StepFrame() {
         const bool netplay_drives_sim =
             nps == NETPLAY_SESSION_TRANSITIONING ||
             nps == NETPLAY_SESSION_CONNECTING ||
-            nps == NETPLAY_SESSION_RUNNING;
+            nps == NETPLAY_SESSION_RUNNING ||
+            nps == NETPLAY_SESSION_REPLAYING;  // playback: run_replay owns the
+                                               // sim — stepping here too doubled
+                                               // the speed AND injected live pad
+                                               // input over the recorded stream
         if (!netplay_drives_sim) {
             // Offline / pre-match path: run the full sim+draw chain.
             njUserMain();

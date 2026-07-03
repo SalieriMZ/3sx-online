@@ -39,6 +39,15 @@ static AFS afs = { 0 };
 static ReadRequest* requests = NULL;
 static SDL_IOStream* stream = NULL;
 static size_t _read_chunk_size = 0;
+// Optional time-budgeted chunking (1.9.0). 0 = legacy fixed byte cap (read the
+// whole per-request chunk in one blocking SDL_ReadIO). When >0 (via env
+// FISTBUMP_AFS_TIME_BUDGET_MS), AFS_RunServer sub-reads in AFS_SUBCHUNK slices
+// until this wall-clock budget elapses, bounding the worst-case frame hitch on
+// slow storage. DEFAULT OFF: this shifts how many frames a load spans — the
+// exact axis behind the 1.8.0/1.8.1 char-select/round-transition desyncs — so
+// it must be synctest + friend-tested before enabling by default.
+static Uint64 _time_budget_ns = 0;
+#define AFS_SUBCHUNK (1024u * 1024u)  // 1 MB sub-read granularity
 
 static void _log(const char* fmt, ...) {
     char buffer[512];
@@ -169,6 +178,14 @@ bool AFS_Init(const char* file_path, size_t read_chunk_size) {
     SDL_assert(read_chunk_size > 0);
     _read_chunk_size = read_chunk_size;
 
+    const char* tb = SDL_getenv("FISTBUMP_AFS_TIME_BUDGET_MS");
+    if (tb != NULL && tb[0] != '\0') {
+        int ms = SDL_atoi(tb);
+        _time_budget_ns = (ms > 0) ? (Uint64)ms * 1000000ull : 0;
+    } else {
+        _time_budget_ns = 0;
+    }
+
     if (!init_afs(file_path)) {
         return false;
     }
@@ -247,16 +264,40 @@ void AFS_RunServer() {
         return;
     }
 
-    const size_t max_read_per_request = _read_chunk_size / running_requests;
-
-    for (int i = 0; i < arrlen(requests); i++) {
-        ReadRequest* request = &requests[i];
-
-        if (request->state != AFS_READ_STATE_READING) {
-            continue;
+    if (_time_budget_ns == 0) {
+        // Legacy: one blocking read per request, capped by an equal share of
+        // the fixed chunk budget.
+        const size_t max_read_per_request = _read_chunk_size / running_requests;
+        for (int i = 0; i < arrlen(requests); i++) {
+            ReadRequest* request = &requests[i];
+            if (request->state != AFS_READ_STATE_READING) {
+                continue;
+            }
+            read_into_request(request, max_read_per_request);
         }
+        return;
+    }
 
-        read_into_request(request, max_read_per_request);
+    // Time-budgeted: round-robin AFS_SUBCHUNK slices across running requests
+    // until they finish or this call's wall-clock budget is spent. Keeps
+    // near-1-frame completion on fast disks while bounding the hitch on slow
+    // ones. Read content is identical to the legacy path (same bytes, same
+    // order) — only how many frames the load spans changes.
+    const Uint64 deadline = SDL_GetTicksNS() + _time_budget_ns;
+    bool progressed = true;
+    while (progressed) {
+        progressed = false;
+        for (int i = 0; i < arrlen(requests); i++) {
+            ReadRequest* request = &requests[i];
+            if (request->state != AFS_READ_STATE_READING) {
+                continue;
+            }
+            read_into_request(request, AFS_SUBCHUNK);
+            progressed = true;
+            if (SDL_GetTicksNS() >= deadline) {
+                return;
+            }
+        }
     }
 }
 

@@ -1,6 +1,5 @@
 /**
  * @file eff91.c
- * TODO: identify what this effect does
  */
 
 #include "sf33rd/Source/Game/effect/eff91.h"
@@ -27,7 +26,10 @@ void effect_91_move(WORK_Other* ewk) {
         return;
     }
 
-    if ((ewk->wu.type == 1 && !Debug_w[49]) && (Round_Operator[0] == 0 || Round_Operator[1] == 0)) {
+    // Grey out the REPLAY row (type 1) when a CPU is involved — but NOT for
+    // netplay, where the post-match REPLAY button saves the recorded match.
+    if ((ewk->wu.type == 1 && !Debug_w[49]) && (Round_Operator[0] == 0 || Round_Operator[1] == 0)
+        && Mode_Type != MODE_NETWORK) {
         ewk->wu.my_clear_level = 205;
         sort_push_request4(&ewk->wu);
         return;

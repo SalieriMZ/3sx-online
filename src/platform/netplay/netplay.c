@@ -29,6 +29,7 @@
 #include "platform/netplay/netplay_log.h"
 #include "platform/netplay/netplay_trace.h"
 #include "platform/netplay/discord_rpc.h"
+#include "platform/netplay/replay.h"
 #include <time.h>
 #include "sf33rd/Source/Game/system/work_sys.h"
 #include "sf33rd/utils/djb2_hash.h"
@@ -110,8 +111,8 @@ static int synctest_handles[2] = { 0, 0 };
 // fixed instead by save-state completeness (ca_check_flag / sa_gauge_flash /
 // chainex_check now live in GameState), NOT by rolling the queue back.
 //
-// A general "freeze the sim while afs_io_in_progress" was tried and REVERTED
-// (commit 0997e9a): the match-start load runs in the STEPPED sim (Game_Task),
+// A general "freeze the sim while afs_io_in_progress" was tried and REVERTED:
+// the match-start load runs in the STEPPED sim (Game_Task),
 // so freezing it deadlocks at a black screen. Do NOT re-add it — see the note at
 // run_netplay's synctest gate. Only the PEER's blocking load is paused, via
 // fistbump_peer_loading. FISTBUMP_SAVE_LDREQ=1 rolls the queue back for A/B
@@ -142,6 +143,26 @@ static float frames_behind = 0;
 static int frame_skip_timer = 0;
 static int transition_ready_frames = 0;
 
+// Direct-P2P → relay fallback / connect deadline (client-only, no wire change).
+// Stamped on entry to NETPLAY_SESSION_CONNECTING; if GekkoSessionStarted hasn't
+// fired within CONNECT_FALLBACK_MS we swap the direct SDLNetAdapter for the
+// RelayAdapter using the relay endpoint the server already delivered in START
+// (match_result.relay_ip/port even when use_relay=0). A second deadline
+// (CONNECT_DEADLINE_MS after the last stamp) gives up via handle_disconnection.
+// Safe re: determinism — CONNECTING only ends on GekkoSessionStarted, which
+// precedes any AdvanceEvent, so no sim frame / save-state exists yet.
+#define CONNECT_FALLBACK_MS 8000
+#define CONNECT_DEADLINE_MS 10000
+static Uint64 connecting_started_ms = 0;
+static bool relay_fallback_done = false;
+
+// Per-game replay splitting: a rematch series is one continuous gekko session,
+// so watch VS_Win_Record (games won) to detect each game's end and cut the
+// recording into a separate file per game. segment_has_fight guards against
+// saving a trailing menu-only segment as a junk replay on exit.
+static int replay_last_series_total = 0;
+static bool replay_segment_has_fight = false;
+
 // Post-match fast-return to the Network menu. Armed in EXITING only when a
 // real match ran (gekko session existed); consumed by the dedicated
 // transition at the end of EXITING. Voluntary menu EXIT keeps the title path.
@@ -154,7 +175,18 @@ static NetworkStats network_stats = { 0 };
 #if NETPLAY_DESYNC_DETECT
 #define STATE_BUFFER_MAX 20
 
-static State state_buffer[STATE_BUFFER_MAX] = { 0 };
+// Diagnostic-only local snapshot ring for desync checksums/dumps — NOT the real
+// rollback save-state (GekkoNet owns that via the save/load events). It is
+// touched only when desync_detect_enabled. Lazy-allocated on first enable so a
+// release build (detection off) doesn't carry ~9.5 MB of BSS (matters on
+// low-RAM Android). NULL-guarded everywhere it's used.
+static State* state_buffer = NULL;
+
+static void ensure_state_buffer(void) {
+    if (state_buffer == NULL) {
+        state_buffer = SDL_calloc(STATE_BUFFER_MAX, sizeof(State));
+    }
+}
 #endif
 
 #if defined(LOSSY_ADAPTER)
@@ -269,7 +301,7 @@ static int compute_local_delay(void) {
     return DELAY_FRAMES;
 }
 
-static void configure_gekko() {
+static void configure_gekko(bool force_relay) {
     GekkoConfig config;
     SDL_zero(config);
 
@@ -312,6 +344,11 @@ static void configure_gekko() {
                                 || (Netplay_TraceLevel() > 0)
                                 || (dd != NULL && dd[0] == '1');
     }
+#if NETPLAY_DESYNC_DETECT
+    if (desync_detect_enabled) {
+        ensure_state_buffer();  // allocate the ~9.5 MB diagnostic ring on demand
+    }
+#endif
 
     current_local_delay = compute_local_delay();
 
@@ -371,7 +408,9 @@ static void configure_gekko() {
     }
 
     const MatchResult* mr = Fistbump_GetResult();
-    if (mr != NULL && mr->use_relay) {
+    // force_relay: a stalled direct-P2P connect fell back to the relay endpoint
+    // the server already delivered in START (use_relay stays 0 on that path).
+    if (mr != NULL && (mr->use_relay || force_relay)) {
         gekko_net_adapter_set(session,
             RelayAdapter_Create(active_sock,
                                 mr->relay_ip,
@@ -390,7 +429,7 @@ static void configure_gekko() {
     SDL_Log("Netplay: starting session for player %d at port %hu", player_number, local_port);
 
     char remote_address_str[100];
-    if (mr != NULL && mr->use_relay) {
+    if (mr != NULL && (mr->use_relay || force_relay)) {
         int other_side = (mr->player == 1) ? 2 : 1;
         SDL_snprintf(remote_address_str, sizeof(remote_address_str), "peer-%d", other_side);
     } else {
@@ -408,6 +447,90 @@ static void configure_gekko() {
             gekko_add_actor(session, GekkoRemotePlayer, &remote_address);
         }
     }
+
+    // Start recording this match (gekko frame 0 == char-select entry, the
+    // deterministic start). Guarded so the relay-fallback recreate — which
+    // re-enters configure_gekko before any frame advances — doesn't restart it.
+    if (!Replay_IsRecording()) {
+        const char* self = Fistbump_GetUsername();
+        const MatchResult* rmr = Fistbump_GetResult();
+        const char* opp = (rmr != NULL && rmr->opponent_name[0]) ? rmr->opponent_name : "peer";
+        const int my_elo = (rmr != NULL) ? rmr->my_elo : 0;
+        const int opp_elo = (rmr != NULL) ? rmr->opp_elo : 0;
+        const char* p1name = (player_number == 0) ? self : opp;
+        const char* p2name = (player_number == 0) ? opp : self;
+        const int p1elo = (player_number == 0) ? my_elo : opp_elo;
+        const int p2elo = (player_number == 0) ? opp_elo : my_elo;
+        Replay_BeginRecord(current_local_delay, p1name, p2name, p1elo, p2elo, (u64)time(NULL));
+        replay_last_series_total = VS_Win_Record[0] + VS_Win_Record[1];
+        replay_segment_has_fight = false;
+    }
+}
+
+// Replay playback: a local-only Gekko session with both actors GekkoLocalPlayer
+// and delay 0. Delay 0 is what makes playback exact — the input submitted for a
+// frame advances that frame immediately with that exact value, so re-submitting
+// the recorded advance-inputs reproduces the recorded advance stream 1:1 (no
+// rollback, since both inputs are always known). Same Mode_Type=MODE_NETWORK sim
+// path as the recording, so the sim reproduces byte-identically on this build.
+static int replay_handles[2] = { 0, 0 };
+
+static void process_events(bool drawing_allowed);  // defined below
+
+static void configure_gekko_replay(void) {
+    GekkoConfig config;
+    SDL_zero(config);
+    Netplay_TraceInit();
+
+    synctest_active = false;
+    save_ldreq_enabled = false;   // monotonic queue, same as live netplay
+    desync_detect_enabled = false;
+    current_local_delay = 0;      // exact reproduction (see note above)
+
+    config.num_players = PLAYER_COUNT;
+    config.input_size = sizeof(u16);
+    config.state_size = sizeof(State);
+    config.max_spectators = 0;
+    config.input_prediction_window = INPUT_PREDICTION_WINDOW;
+    config.desync_detection = false;
+    config.limited_saving = true;
+
+    if (gekko_create(&session, GekkoGameSession)) {
+        gekko_start(session, &config);
+    }
+    for (int i = 0; i < PLAYER_COUNT; i++) {
+        replay_handles[i] = gekko_add_actor(session, GekkoLocalPlayer, NULL);
+        gekko_set_local_delay(session, replay_handles[i], 0);
+    }
+    player_handle = replay_handles[0];
+    Netplay_Log("REPLAY", "playback session started (delay 0, both-local)");
+}
+
+static void run_replay(void) {
+    // Keep the matchmaking-server heartbeat alive during playback: a replay of a
+    // normal set easily exceeds the server's 180s idle reap, and the online UI
+    // (the usual PING pump) is hidden while watching. Fistbump_Run in the
+    // logged-in-idle state just drains TCP + sends PING (same call run_netplay
+    // makes every frame), so the session isn't reaped mid-replay.
+    Fistbump_Run();
+
+    // Feed the next recorded input pair to both local actors, then advance.
+    // add_local_input queues one input per actor; with delay 0 + both-local the
+    // adds and advances stay 1:1, so consuming one recorded frame per tick keeps
+    // frame alignment. End of stream (or a user Back) tears down via EXITING.
+    u16 a = 0, b = 0;
+    if (!Replay_PlaybackNext(&a, &b)) {
+        session_state = NETPLAY_SESSION_EXITING;
+        return;
+    }
+    gekko_network_poll(session);
+    gekko_add_local_input(session, replay_handles[0], &a);
+    gekko_add_local_input(session, replay_handles[1], &b);
+    // Drain session-level events (Started/etc.) so the queue doesn't grow; no
+    // disconnect/desync handling needed for a local playback.
+    int sev_count = 0;
+    gekko_session_events(session, &sev_count);
+    process_events(true);
 }
 
 static u16 get_inputs() {
@@ -545,6 +668,9 @@ static void clean_state_pointers(State* state) {
 /// Save state in state buffer.
 /// @return Pointer to state as it has been saved.
 static const State* note_state(const State* state, int frame) {
+    if (state_buffer == NULL) {
+        return state;  // detection disabled / alloc failed → no local snapshot
+    }
     if (frame < 0) {
         frame += STATE_BUFFER_MAX;
     }
@@ -562,6 +688,9 @@ static void dump_state(const State* src, const char* filename) {
 }
 
 static void dump_saved_state(int frame) {
+    if (state_buffer == NULL) {
+        return;
+    }
     const State* src = &state_buffer[frame % STATE_BUFFER_MAX];
 
     char filename[100];
@@ -744,6 +873,10 @@ static void advance_game(GekkoGameEvent* event, bool render) {
     note_input(inputs[0], 0, frame);
     note_input(inputs[1], 1, frame);
 
+    // Write-only replay capture (no-op unless recording). Overwrite-by-frame
+    // keeps the confirmed input; never in the save-state, so it can't desync.
+    Replay_RecordFrame(frame, inputs[0], inputs[1]);
+
     step_game(render);
 }
 
@@ -909,6 +1042,37 @@ static void run_netplay() {
         return;
     }
 
+    // Direct-P2P connect deadline: if gekko hasn't started the session (no
+    // punch-through) after CONNECT_FALLBACK_MS, swap the direct adapter for the
+    // relay endpoint the server already gave us; a further CONNECT_DEADLINE_MS
+    // with still no session gives up. Guarded on CONNECTING so it self-disables
+    // the instant GekkoSessionStarted flips us to RUNNING. This is the only
+    // timeout on the connect handshake (the fistbump watchdog exempts
+    // GAME_START), so symmetric-NAT pairs no longer black-screen forever.
+    if (session_state == NETPLAY_SESSION_CONNECTING) {
+        const Uint64 elapsed = SDL_GetTicks() - connecting_started_ms;
+        const MatchResult* cmr = Fistbump_GetResult();
+        const bool can_fallback = !relay_fallback_done && cmr != NULL
+                                  && !cmr->use_relay && cmr->relay_ip[0] != '\0';
+        if (elapsed > CONNECT_FALLBACK_MS && can_fallback) {
+            Netplay_Log("CONNECT",
+                        "no direct session in %u ms; relay fallback %s:%d (match=%s side=%d)",
+                        (unsigned)elapsed, cmr->relay_ip, cmr->relay_port,
+                        cmr->match_id, cmr->player);
+            SDL_Log("Netplay: direct P2P stalled, switching to relay");
+            gekko_destroy(&session);   // nulls session (same as EXITING teardown)
+            SDLNetAdapter_Destroy();   // drop the dead direct adapter's cache
+            configure_gekko(true);     // recreate on the relay adapter, re-add actors
+            relay_fallback_done = true;
+            connecting_started_ms = SDL_GetTicks();  // 2nd deadline from here
+        } else if (elapsed > CONNECT_DEADLINE_MS) {
+            Netplay_Log("CONNECT", "session never started (%u ms, fallback=%d) -> disconnect",
+                        (unsigned)elapsed, relay_fallback_done ? 1 : 0);
+            handle_disconnection();
+            return;
+        }
+    }
+
     extern bool afs_io_in_progress;
 
     // Service the load queue outside the stepped sim whenever a load is
@@ -929,6 +1093,12 @@ static void run_netplay() {
 
     if (fistbump_peer_loading) {
         // Peer stalled on AFS — pause our advance to prevent rollback blow-out.
+        // Keep the transport draining (acks/keepalives) so a multi-second peer
+        // load doesn't stall gekko's own ping and trip a false disconnect, and
+        // so inbound datagrams don't pile up in the socket buffer until dropped.
+        if (session != NULL) {
+            gekko_network_poll(session);
+        }
         update_network_stats();
         return;
     }
@@ -944,6 +1114,9 @@ static void run_netplay() {
     // (save_ldreq off, the pre-1.8.0 behavior) so a rollback never re-issues it,
     // and only pauses on the PEER's big blocking load via fistbump_peer_loading.
     if (synctest_active && afs_io_in_progress) {
+        if (session != NULL) {
+            gekko_network_poll(session);
+        }
         update_network_stats();
         return;
     }
@@ -958,6 +1131,25 @@ static void run_netplay() {
 
     frame_skip_timer -= 1;
     frame_skip_timer = SDL_max(frame_skip_timer, 0);
+
+    // Per-game replay splitting: when a game ends (VS_Win_Record grows), flush
+    // the current game as its own file and rebase for the next. Observer-only —
+    // the cut just bounds the replay file; a slightly-off boundary (predicted
+    // frame that later rolls back) can't affect the sim. segment_has_fight lets
+    // the exit path skip saving a menu-only trailing segment.
+    if (Replay_IsRecording()) {
+        if (Disp_Cockpit) {
+            replay_segment_has_fight = true;
+        }
+        const int series_total = VS_Win_Record[0] + VS_Win_Record[1];
+        if (series_total > replay_last_series_total) {
+            replay_last_series_total = series_total;
+            Replay_CutGame(My_char[0], My_char[1], Super_Arts[0], Super_Arts[1],
+                           Player_Color[0], Player_Color[1], VS_Stage,
+                           VS_Win_Record[0], VS_Win_Record[1]);
+            replay_segment_has_fight = false;
+        }
+    }
 
     // Update stats
 
@@ -1008,6 +1200,27 @@ void Netplay_TickDirectP2P() {
     transition_ready_frames = 0;
 
     session_state = NETPLAY_SESSION_TRANSITIONING;
+}
+
+bool Netplay_BeginReplay(const char* path) {
+    if (session_state != NETPLAY_SESSION_IDLE) {
+        return false;  // already in a match/replay
+    }
+    if (!Replay_LoadForPlayback(path)) {
+        return false;  // bad file / version mismatch — Replay_GetError() has why
+    }
+    // Same deterministic start the recording used (RNG=0, E_Timer=0, operator
+    // flags, clean inputs). Mode_Type stays MODE_NETWORK so the sim runs the
+    // exact path it ran while recording.
+    setup_vs_mode();
+    SDL_zeroa(input_history);
+    frames_behind = 0;
+    frame_skip_timer = 0;
+    transition_ready_frames = 0;
+    player_number = 0;
+    session_state = NETPLAY_SESSION_TRANSITIONING;
+    Netplay_Log("REPLAY", "begin playback %s", path);
+    return true;
 }
 
 void Netplay_SetMatchmakingParams(const char* server_ip, int server_port) {
@@ -1092,6 +1305,30 @@ void Netplay_CancelMatchmaking() {
 void Netplay_Run() {
     switch (session_state) {
     case NETPLAY_SESSION_TRANSITIONING: {
+        // Replay playback shares the deterministic transition-to-char-select but
+        // has no server/peer: pump the AFS loader + step the sim to char-select,
+        // then start the local playback session instead of the networked one.
+        if (Replay_PlaybackActive()) {
+            extern bool afs_io_in_progress;
+            extern void Check_LDREQ_Queue(void);
+            if (afs_io_in_progress) {
+                Check_LDREQ_Queue();
+            }
+            if (game_ready_to_run_character_select()) {
+                transition_ready_frames += 1;
+            } else {
+                transition_ready_frames = 0;
+                clean_input_buffers();
+                step_game(true);
+            }
+            if (transition_ready_frames >= 2) {
+                configure_gekko_replay();
+                session_state = NETPLAY_SESSION_REPLAYING;
+                log_transition_state("REPLAY/transition-done");
+            }
+            break;
+        }
+
         static int transitioning_log_counter = 0;
         if ((transitioning_log_counter++ % 60) == 0) {
             log_transition_state("TRANSITIONING/tick");
@@ -1130,8 +1367,10 @@ void Netplay_Run() {
         }
 
         if (transition_ready_frames >= 2) {
-            configure_gekko();
+            configure_gekko(false);
             session_state = NETPLAY_SESSION_CONNECTING;
+            connecting_started_ms = SDL_GetTicks();
+            relay_fallback_done = false;
             log_transition_state("TRANSITIONING/done");
         }
 
@@ -1143,7 +1382,33 @@ void Netplay_Run() {
         run_netplay();
         break;
 
-    case NETPLAY_SESSION_EXITING:
+    case NETPLAY_SESSION_REPLAYING:
+        run_replay();
+        break;
+
+    case NETPLAY_SESSION_EXITING: {
+        // Was this a replay playback (vs a real online match)? Capture before
+        // Replay_EndPlayback clears the flag — it decides whether we keep the
+        // matchmaking-server session alive on teardown.
+        const bool was_replay = Replay_PlaybackActive();
+        // Flush the replay while the final sim globals are still valid, before
+        // the teardown below. Each finished game was already cut to its own file
+        // by run_netplay; here we only save an UNCUT game still in progress (e.g.
+        // the player quit or disconnected mid-fight). A menu-only trailing
+        // segment (last game already cut) is discarded, not saved as junk.
+        if (Replay_IsRecording()) {
+            if (replay_segment_has_fight) {
+                Replay_EndRecord(My_char[0], My_char[1], Super_Arts[0], Super_Arts[1],
+                                 Player_Color[0], Player_Color[1], VS_Stage,
+                                 VS_Win_Record[0], VS_Win_Record[1]);
+            } else {
+                Replay_DiscardRecord();
+            }
+        }
+        replay_last_series_total = 0;
+        replay_segment_has_fight = false;
+        // Drop any loaded playback buffer (end-of-stream or user Back).
+        Replay_EndPlayback();
         if (session != NULL) {
             netplay_return_to_network = true;
         }
@@ -1160,7 +1425,15 @@ void Netplay_Run() {
             NET_Quit();
         }
 
-        Netplay_CancelMatchmaking();
+        // A replay never had a matchmaking match — keep the TCP/login session
+        // (Fistbump_EndMatch just clears local match state) so watching a replay
+        // doesn't silently log the user out. A real match uses the full cancel
+        // (which resets fistbump when not in a room).
+        if (was_replay) {
+            Fistbump_EndMatch();
+        } else {
+            Netplay_CancelMatchmaking();
+        }
 
         Soft_Reset_Sub();
 
@@ -1181,6 +1454,8 @@ void Netplay_Run() {
         frame_skip_timer = 0;
         frame_max_rollback = 0;
         transition_ready_frames = 0;
+        connecting_started_ms = 0;
+        relay_fallback_done = false;
         matchmaking_pending = false;
         direct_p2p_pending = false;
         synctest_active = false;
@@ -1248,6 +1523,7 @@ void Netplay_Run() {
         demo_disabled_after_netplay = true;
         log_transition_state("EXITING/done");
         break;
+    }
 
     case NETPLAY_SESSION_IDLE:
         break;
@@ -1256,6 +1532,13 @@ void Netplay_Run() {
 
 NetplaySessionState Netplay_GetSessionState() {
     return session_state;
+}
+
+// Local player's slot (0 or 1) in the current session. The post-match menu is
+// inside the synced sim (both machines run both players' inputs), so per-machine
+// actions like "save the replay" must compare the pressing player against this.
+int Netplay_GetLocalPlayer(void) {
+    return player_number;
 }
 
 float Netplay_GetFramesBehind(void) {
@@ -1316,7 +1599,11 @@ void Netplay_TickDiscord(void) {
 }
 
 void Netplay_HandleMenuExit() {
-    Netplay_CancelMatchmaking();
+    // For a replay, don't tear down the matchmaking/login session — the EXITING
+    // arm keeps it alive too (see the was_replay branch there).
+    if (!Replay_PlaybackActive()) {
+        Netplay_CancelMatchmaking();
+    }
 
     switch (session_state) {
     case NETPLAY_SESSION_IDLE:
@@ -1326,6 +1613,7 @@ void Netplay_HandleMenuExit() {
     case NETPLAY_SESSION_TRANSITIONING:
     case NETPLAY_SESSION_CONNECTING:
     case NETPLAY_SESSION_RUNNING:
+    case NETPLAY_SESSION_REPLAYING:
         session_state = NETPLAY_SESSION_EXITING;
         break;
     }

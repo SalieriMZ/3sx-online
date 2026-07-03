@@ -1617,7 +1617,17 @@ void Ck_Win_Record() {
         if (mr != NULL && mr->match_id[0] != '\0') {
             int my_idx = (mr->player == 2) ? 1 : 0;
             int opp_idx = 1 - my_idx;
-            Fistbump_SendResult(PL_Wins[my_idx], PL_Wins[opp_idx]);
+            // Report the per-series cumulative GAME wins, not this game's round
+            // score (PL_Wins, which Game01_Sub resets to 0 every game — including
+            // in-game rematches — so a rematch series never grew the totals the
+            // server credits per game). VS_Win_Record accumulates game wins across
+            // the whole series (reset only on a fresh matchmake via
+            // Clear_Personal_Data, not on REMATCH) and lives in the rollback
+            // save-state, so it is deterministic and both peers agree.
+            // My_char (0-based fighter id) is in the rollback save-state, so
+            // both peers report matching per-side chars for the matchup stats.
+            Fistbump_SendResult(VS_Win_Record[my_idx], VS_Win_Record[opp_idx],
+                                My_char[my_idx], My_char[opp_idx]);
         }
         break;
     }

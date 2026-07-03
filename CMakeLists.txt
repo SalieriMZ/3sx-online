@@ -143,7 +143,7 @@ endif()
 # overridden via -DBUILD_VERSION=...; otherwise we use the project version.
 # BUILD_GIT_SHA is auto-detected from the working tree when not provided.
 if(NOT DEFINED BUILD_VERSION)
-    set(BUILD_VERSION "1.8.1")
+    set(BUILD_VERSION "1.9.0")
 endif()
 if(NOT DEFINED BUILD_GIT_SHA)
     execute_process(
@@ -197,7 +197,6 @@ target_compile_options(3sx PRIVATE
     ${DISABLED_WARNINGS}
 
     $<$<OR:$<CONFIG:Debug>,$<CONFIG:Release>,$<CONFIG:Statcheck>>:-Wno-unused-function>
-    # $<$<CONFIG:Debug>:-Wno-unused-variable>
     -Wno-unused-variable
     $<$<OR:$<CONFIG:Debug>,$<CONFIG:Statcheck>>:-Wno-unused-but-set-variable>
 )

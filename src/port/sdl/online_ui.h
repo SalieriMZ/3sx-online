@@ -38,6 +38,11 @@ bool OnlineUI_IsCapturingInput(void);
 // access to the menu task graph).
 bool OnlineUI_ConsumeExitRequest(void);
 
+// Transient overlay notice (e.g. "REPLAY SAVED") drawn for ~2s over whatever is
+// on screen, including gameplay/menus. Render-only — never touches sim state,
+// so it's safe to trigger per-machine inside the synced post-match menu.
+void OnlineUI_ShowToast(const char* text);
+
 #else
 
 static inline void OnlineUI_Init(void* w) { (void)w; }
@@ -49,5 +54,6 @@ static inline void OnlineUI_Render(void) {}
 static inline void OnlineUI_HandleSDLEvent(const void* e) { (void)e; }
 static inline bool OnlineUI_IsCapturingInput(void) { return false; }
 static inline bool OnlineUI_ConsumeExitRequest(void) { return false; }
+static inline void OnlineUI_ShowToast(const char* t) { (void)t; }
 
 #endif // NETPLAY_ENABLED

@@ -16,11 +16,16 @@
 #include <string.h>
 #include <time.h>
 
-// 1.4.1 (release 1.8.1): rollback determinism fixes (round-transition +
-// throw/parry save-state completeness, monotonic AFS load queue, char-select
-// stutter). Protocol cut from 1.4.0 so the server (ALLOWED_VERSIONS = {1.4.1})
-// rejects every 1.8.0 client — a 1.8.0 peer would desync against 1.8.1.
-#define FISTBUMP_CLIENT_VERSION "1.4.1"
+// 1.4.3 (release 1.9.0): RESULT now carries both players' fighter ids
+// (RESULT <id> <my_wins> <opp_wins> <my_char> <opp_char>) so the server records
+// per-game matchup stats. Both peers report the same chars (My_char is in the
+// save-state), so the concordance check still holds; cut from 1.4.2 to keep
+// pairs on one wire format. (1.9.0 also adds PING/PONG heartbeat + an extended
+// PROFILE line, both additive — the protocol string moves only for RESULT.)
+// 1.4.2 (release 1.8.2): rematch results report the series' cumulative game
+// wins (was this game's round score, which reset every game). Also added the
+// additive QUEUE timeout/requeued + CANCEL <id> <reason> notices.
+#define FISTBUMP_CLIENT_VERSION "1.4.3"
 
 // Build/release version, stamped at compile time (see CMakeLists.txt). Compared
 // against the server's reported latest release for the in-game update check.
@@ -45,17 +50,22 @@ static int udp_retry_timer = 0;
 
 static const char* base_path = NULL;
 
-static DAG dag;
 static JWT refresh_token;
 static Fistbump_Profile profile;
 static MatchResult match_result;
 static Fistbump_Room current_room;
 static bool in_room = false;
 // Last RESULT score pair actually sent. In-game rematches keep the same
-// match_id and re-report cumulative PL_Wins after every game, so the guard
-// is "did the score change" rather than "did we ever send".
+// match_id and re-report the series' cumulative game wins after every game
+// (see Ck_Win_Record), so the guard is "did the score change" rather than
+// "did we ever send" — the per-frame result screen re-fires with the same
+// totals until the next game finishes.
 static int result_sent_wins[2] = { -1, -1 };
 static char last_error[256] = { 0 };
+// Last matchmaking mode we queued for, so a server "QUEUE requeued <mode>"
+// notice (after the other side of a found match declines/fails to punch) can
+// report which queue we were put back into.
+static char last_queue_mode[16] = "casual";
 
 // Defined near the bottom of this file (netplay polls them). Forward-declared so
 // read_into_line_buf — which sits above their definition — can trip the in-match
@@ -67,6 +77,13 @@ extern bool fistbump_peer_cancelled;
 // FISTBUMP_ERROR instead of hanging forever.
 static FistbumpState run_prev_state = FISTBUMP_IDLE;
 static Uint64 state_entered_ms = 0;
+
+// Heartbeat (1.9.0): send "PING" every 60s while connected and expect "PONG";
+// if none arrives for 90s the link is dead (NAT drop with no RST) → trip the
+// same error path as a read failure. Clocks seed on CONNECTED so a slow login
+// can't false-trip. Server reaps sessions idle >180s, so 60s keeps us alive.
+static Uint64 last_ping_ms = 0;
+static Uint64 last_pong_ms = 0;
 
 static void SaveToken(const JWT* jwt) {
     if (base_path == NULL || jwt == NULL) {
@@ -210,6 +227,29 @@ static void read_into_line_buf() {
     }
 }
 
+// All TCP command writes route through here so a broken/closed stream is
+// noticed at send time, instead of waiting for the next read to see the RST.
+// A dropped RESULT would silently corrupt crediting and a dropped
+// DECLINE/LOADING would leave the peer hanging, so we mirror the read-error
+// policy (read_into_line_buf): in a live match trip the peer-cancel teardown,
+// otherwise fail to a retryable error. Returns false on failure.
+static bool fb_send(const void* buf, int len) {
+    if (tcp_sock == NULL || buf == NULL || len <= 0) {
+        return false;
+    }
+    if (!NET_WriteToStreamSocket(tcp_sock, buf, len)) {
+        Netplay_Log("DISCONNECT", "tcp write failed in state %d", (int)state);
+        if (state == FISTBUMP_GAME_START) {
+            fistbump_peer_cancelled = true;
+        } else if (state != FISTBUMP_IDLE && state != FISTBUMP_ERROR) {
+            SDL_strlcpy(last_error, "Connection to server lost.", sizeof(last_error));
+            state = FISTBUMP_ERROR;
+        }
+        return false;
+    }
+    return true;
+}
+
 void Fistbump_Start(const char* server_ip, int tcp_port, int udp_port, const char* pref_path) {
     NET_Init();
     Chat_Init();
@@ -271,6 +311,9 @@ void Fistbump_Connect() {
         switch (NET_GetConnectionStatus(tcp_sock)) {
         case NET_SUCCESS:
             connect_state = FISTBUMP_CONN_CONNECTED;
+            // Seed the heartbeat window from a real connect, not process start.
+            last_pong_ms = SDL_GetTicks();
+            last_ping_ms = last_pong_ms;
             break;
 
         case NET_FAILURE:
@@ -298,7 +341,7 @@ void Fistbump_Login() {
         char buf[1100];
         SDL_snprintf(buf, sizeof(buf), "REFRESH %s %s %s\n", refresh_token.token, FISTBUMP_CLIENT_VERSION,
                      BUILD_PLATFORM_STR);
-        NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
+        fb_send(buf, SDL_strlen(buf));
     } else {
         // No saved token — wait for the UI to REGISTER or LOGIN.
         state = FISTBUMP_AWAITING_CREDENTIALS;
@@ -312,7 +355,7 @@ void Fistbump_Register(const char* username, const char* password) {
     char buf[256];
     SDL_snprintf(buf, sizeof(buf), "REGISTER %s %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION,
                  BUILD_PLATFORM_STR);
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
+    fb_send(buf, (int)SDL_strlen(buf));
     last_error[0] = '\0';
     state = FISTBUMP_LOGGING_IN;
     Netplay_Log("AUTH", "register attempt user=%s", username);
@@ -325,16 +368,10 @@ void Fistbump_LoginDirect(const char* username, const char* password) {
     char buf[256];
     SDL_snprintf(buf, sizeof(buf), "LOGIN %s %s %s %s\n", username, password, FISTBUMP_CLIENT_VERSION,
                  BUILD_PLATFORM_STR);
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
+    fb_send(buf, (int)SDL_strlen(buf));
     last_error[0] = '\0';
     state = FISTBUMP_LOGGING_IN;
     Netplay_Log("AUTH", "login attempt user=%s", username);
-}
-
-void Fistbump_SetServer(const char* server_ip, int tcp_port, int udp_port) {
-    const char* saved_base = base_path;
-    Fistbump_Reset();
-    Fistbump_Start(server_ip, tcp_port, udp_port, saved_base);
 }
 
 void Fistbump_SetForceRelay(int v) {
@@ -343,7 +380,7 @@ void Fistbump_SetForceRelay(int v) {
     }
     char buf[32];
     SDL_snprintf(buf, sizeof(buf), "SET force_relay %d\n", v ? 1 : 0);
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
+    fb_send(buf, (int)SDL_strlen(buf));
     SDL_Log("Fistbump: force_relay=%d advertised mid-session", v ? 1 : 0);
 }
 
@@ -359,12 +396,37 @@ const char* Fistbump_GetUsername(void) {
     return profile.username;
 }
 
+int Fistbump_GetElo(void) {
+    return profile.elo;
+}
+
+// "Unranked" or an SF6 tier + sub, e.g. "Gold 3" / "Master". Empty if the
+// server didn't report it (pre-1.9.0 server). Returns a static buffer.
+const char* Fistbump_GetRankLabel(void) {
+    static char label[32];
+    if (profile.rank[0] == '\0') {
+        return "";
+    }
+    if (profile.rank_sub > 0) {
+        SDL_snprintf(label, sizeof(label), "%s %d", profile.rank, profile.rank_sub);
+    } else {
+        SDL_strlcpy(label, profile.rank, sizeof(label));
+    }
+    return label;
+}
+
+int Fistbump_GetMainChar(void) {
+    return profile.main_char;
+}
+
 void Fistbump_Queue() {
     Fistbump_QueueMode("casual");
 }
 
 void Fistbump_QueueMode(const char* mode) {
     state = FISTBUMP_AWAITING_MATCH;
+    SDL_strlcpy(last_queue_mode, (mode != NULL && mode[0] != '\0') ? mode : "casual",
+                sizeof(last_queue_mode));
 
     char buf[128];
     if (mode != NULL && mode[0] != '\0') {
@@ -372,7 +434,7 @@ void Fistbump_QueueMode(const char* mode) {
     } else {
         SDL_snprintf(buf, sizeof(buf), "QUEUE add\n");
     }
-    NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
+    fb_send(buf, SDL_strlen(buf));
     Netplay_Log("QUEUE", "add mode=%s", (mode && mode[0]) ? mode : "casual");
 }
 
@@ -380,38 +442,38 @@ void Fistbump_RoomCreate(const char* name) {
     char buf[128];
     SDL_snprintf(buf, sizeof(buf), "ROOM CREATE %s\n",
                  (name != NULL && name[0] != '\0') ? name : "Room");
-    NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
+    fb_send(buf, SDL_strlen(buf));
 }
 
 void Fistbump_RoomJoin(const char* code) {
     if (code == NULL || code[0] == '\0') return;
     char buf[128];
     SDL_snprintf(buf, sizeof(buf), "ROOM JOIN %s\n", code);
-    NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
+    fb_send(buf, SDL_strlen(buf));
 }
 
 void Fistbump_RoomLeave(void) {
     const char* cmd = "ROOM LEAVE\n";
-    NET_WriteToStreamSocket(tcp_sock, cmd, (int)SDL_strlen(cmd));
+    fb_send(cmd, (int)SDL_strlen(cmd));
 }
 
 void Fistbump_RoomSlot(char slot) {
     if (tcp_sock == NULL || (slot != 'A' && slot != 'B')) return;
     char buf[24];
     int len = SDL_snprintf(buf, sizeof(buf), "ROOM SLOT %c\n", slot);
-    NET_WriteToStreamSocket(tcp_sock, buf, len);
+    fb_send(buf, len);
 }
 
 void Fistbump_RoomUnslot(void) {
     if (tcp_sock == NULL) return;
     const char* cmd = "ROOM UNSLOT\n";
-    NET_WriteToStreamSocket(tcp_sock, cmd, (int)SDL_strlen(cmd));
+    fb_send(cmd, (int)SDL_strlen(cmd));
 }
 
 void Fistbump_RoomStart(void) {
     if (tcp_sock == NULL) return;
     const char* cmd = "ROOM START\n";
-    NET_WriteToStreamSocket(tcp_sock, cmd, (int)SDL_strlen(cmd));
+    fb_send(cmd, (int)SDL_strlen(cmd));
     Netplay_Log("ROOM", "host pressed START");
 }
 
@@ -419,7 +481,7 @@ void Fistbump_RoomSettings(const char* key, int value) {
     if (tcp_sock == NULL || key == NULL) return;
     char buf[64];
     int len = SDL_snprintf(buf, sizeof(buf), "ROOM SETTINGS %s %d\n", key, value);
-    NET_WriteToStreamSocket(tcp_sock, buf, len);
+    fb_send(buf, len);
 }
 
 void Fistbump_CancelQueue() {
@@ -427,7 +489,7 @@ void Fistbump_CancelQueue() {
 
     char buf[128];
     SDL_snprintf(buf, sizeof(buf), "QUEUE remove\n");
-    NET_WriteToStreamSocket(tcp_sock, buf, SDL_strlen(buf));
+    fb_send(buf, SDL_strlen(buf));
     Netplay_Log("QUEUE", "cancel");
 }
 
@@ -474,26 +536,34 @@ void Fistbump_DeclineMatch() {
     Netplay_Log("MATCH", "decline id=%s", match_result.match_id);
     char buf[128];
     SDL_snprintf(buf, sizeof(buf), "DECLINE %s\n", match_result.match_id);
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
+    fb_send(buf, (int)SDL_strlen(buf));
     // Server's CANCEL only goes to the OTHER peer; reset locally too.
     SDL_zero(match_result);
     result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_IDLE;
 }
 
-void Fistbump_SendResult(int my_wins, int opp_wins) {
+// my_wins/opp_wins are the series' cumulative game wins (monotonically growing
+// across an in-game rematch), NOT this game's round score — the server credits
+// each game as the delta over the totals it has already counted for this
+// match_id (see server handle_result). my_char/opp_char are the two players'
+// 0-based fighter ids (My_char) for the per-game matchup stats; they are
+// constant for the match, so the win-dedup guard alone gates re-sends.
+void Fistbump_SendResult(int my_wins, int opp_wins, int my_char, int opp_char) {
     if (tcp_sock == NULL || match_result.match_id[0] == '\0') {
         return;
     }
     if (my_wins == result_sent_wins[0] && opp_wins == result_sent_wins[1]) {
-        return; // same score already reported (result screen re-fires per frame)
+        return; // same totals already reported (result screen re-fires per frame)
     }
     char buf[128];
-    SDL_snprintf(buf, sizeof(buf), "RESULT %s %d %d\n",
-                 match_result.match_id, my_wins, opp_wins);
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)SDL_strlen(buf));
-    SDL_Log("Fistbump: sent RESULT match=%s wins=%d/%d", match_result.match_id, my_wins, opp_wins);
-    Netplay_Log("MATCH", "result id=%s my=%d opp=%d", match_result.match_id, my_wins, opp_wins);
+    SDL_snprintf(buf, sizeof(buf), "RESULT %s %d %d %d %d\n",
+                 match_result.match_id, my_wins, opp_wins, my_char, opp_char);
+    fb_send(buf, (int)SDL_strlen(buf));
+    SDL_Log("Fistbump: sent RESULT match=%s wins=%d/%d chars=%d/%d",
+            match_result.match_id, my_wins, opp_wins, my_char, opp_char);
+    Netplay_Log("MATCH", "result id=%s my=%d opp=%d mychar=%d oppchar=%d",
+                match_result.match_id, my_wins, opp_wins, my_char, opp_char);
     result_sent_wins[0] = my_wins;
     result_sent_wins[1] = opp_wins;
 }
@@ -593,24 +663,22 @@ void Fistbump_HandleVERSION(const char* line) {
 
 void Fistbump_HandleSESSION(const char* line) {
     server_version[0] = '\0';
+    id_buf[0] = '\0';
     // SESSION <sid> [server_version] — the version token is optional + additive.
-    SDL_sscanf(line, "SESSION %7s %15s", id_buf, server_version);
+    // Require at least the sid; without it there is no session to open.
+    if (SDL_sscanf(line, "SESSION %7s %15s", id_buf, server_version) < 1) {
+        SDL_Log("Fistbump: malformed SESSION: %s\n", line);
+        return;
+    }
     SDL_Log("Fistbump: received ID: %s server=%s\n", id_buf, server_version);
 
     // Pre-auth update check — ask the broker for the latest released version.
     if (tcp_sock != NULL) {
         static const char q[] = "VERSION\n";
-        NET_WriteToStreamSocket(tcp_sock, q, (int)(sizeof(q) - 1));
+        fb_send(q, (int)(sizeof(q) - 1));
     }
 
     state = FISTBUMP_SENDING_TOKEN;
-}
-
-void Fistbump_HandleDAG(const char* line) {
-    SDL_sscanf(line, "DAG %8s %127s", dag.code, dag.activate_url);
-    SDL_Log("Fistbump: DAG %s, login at %s\n", dag.code, dag.activate_url);
-
-    state = FISTBUMP_AWAITING_LOGIN;
 }
 
 static bool ip_is_192_168(const char* s) {
@@ -672,9 +740,14 @@ static bool collect_lan_candidates(char* out, size_t out_size) {
 }
 
 void Fistbump_HandleUDP(const char* line) {
-    char res[8];
+    char res[8] = { 0 };
 
-    SDL_sscanf(line, "UDP %7s", res);
+    // Require a parsed token before comparing: a bare/malformed "UDP" line
+    // (buggy or hostile server) would otherwise leave res uninitialized and
+    // strcmp would read garbage.
+    if (SDL_sscanf(line, "UDP %7s", res) != 1) {
+        return;
+    }
 
     if (strcmp(res, "ok") == 0) {
         SDL_Log("Fistbump: UDP ok!\n");
@@ -701,7 +774,7 @@ static void advertise_lan_ip(void) {
     char buf[320];
     int len = SDL_snprintf(buf, sizeof(buf), "UDP_LAN %s\n", lan_list);
     if (len > 0 && len < (int)sizeof(buf)) {
-        NET_WriteToStreamSocket(tcp_sock, buf, len);
+        fb_send(buf, len);
         SDL_Log("Fistbump: advertised LAN ips=%s", lan_list);
         Netplay_Log("CONFIG", "advertised lan_ips=%s", lan_list);
     }
@@ -723,24 +796,40 @@ void Fistbump_HandlePROFILE(const char* line) {
     // Full username (server sends it untruncated as of 1.7.28). The old %7s
     // limit broke room host/slot detection for 8+ char names: the overlay
     // compares profile.username against the full names in ROOM STATE.
-    SDL_sscanf(line, "PROFILE %63s", profile.username);
-    SDL_Log("Fistbump: Logged in as %s\n", profile.username);
-    Netplay_Log("AUTH", "logged in user=%s", profile.username);
+    // 1.9.0 appends " <elo> <rank_tier> <rank_sub> <main_char>" — additive, so a
+    // 4-field parse still fills username when the server omits the stats.
+    profile.elo = -1;
+    profile.rank[0] = '\0';
+    profile.rank_sub = 0;
+    profile.main_char = -1;
+    SDL_sscanf(line, "PROFILE %63s %d %23s %d %d", profile.username,
+               &profile.elo, profile.rank, &profile.rank_sub, &profile.main_char);
+    SDL_Log("Fistbump: Logged in as %s (elo=%d rank=%s %d char=%d)\n",
+            profile.username, profile.elo, profile.rank, profile.rank_sub, profile.main_char);
+    Netplay_Log("AUTH", "logged in user=%s elo=%d rank=%s%d",
+                profile.username, profile.elo, profile.rank, profile.rank_sub);
 
     advertise_lan_ip();
 
     const Args* a = get_args();
     if (a != NULL && a->netplay.force_relay) {
         const char* cmd = "SET force_relay 1\n";
-        NET_WriteToStreamSocket(tcp_sock, cmd, (int)SDL_strlen(cmd));
+        fb_send(cmd, (int)SDL_strlen(cmd));
         SDL_Log("Fistbump: force_relay=1 advertised to server");
     }
 }
 
 void Fistbump_HandleMATCH(const char* line) {
-    SDL_sscanf(line, "MATCH %36s %63s", match_result.match_id, match_result.opponent_name);
-    SDL_Log("Fistbump: matched with %s\n", match_result.opponent_name);
-    Netplay_Log("QUEUE", "matched id=%s opp=%s", match_result.match_id, match_result.opponent_name);
+    // "MATCH <id> <opponent> [<my_elo> <opp_elo>]" — the two ELO tokens are
+    // additive (1.9.0); an older server omits them and they stay 0 (unknown).
+    match_result.my_elo = 0;
+    match_result.opp_elo = 0;
+    SDL_sscanf(line, "MATCH %36s %63s %d %d", match_result.match_id,
+               match_result.opponent_name, &match_result.my_elo, &match_result.opp_elo);
+    SDL_Log("Fistbump: matched with %s (elo %d vs %d)\n", match_result.opponent_name,
+            match_result.my_elo, match_result.opp_elo);
+    Netplay_Log("QUEUE", "matched id=%s opp=%s elo=%d/%d", match_result.match_id,
+                match_result.opponent_name, match_result.my_elo, match_result.opp_elo);
 
     result_sent_wins[0] = result_sent_wins[1] = -1;
     state = FISTBUMP_MATCHED;
@@ -773,14 +862,16 @@ bool Fistbump_SendChatRaw(const char* buf, size_t len) {
     if (tcp_sock == NULL || buf == NULL || len == 0) {
         return false;
     }
-    NET_WriteToStreamSocket(tcp_sock, buf, (int)len);
-    return true;
+    return fb_send(buf, (int)len);
 }
 
 void Fistbump_HandleCANCEL(const char* line) {
     char match_id[37];
+    char reason[16] = { 0 }; // optional, additive: "declined" | "timeout" | ...
 
-    if (SDL_sscanf(line, "CANCEL %36s", match_id) != 1) {
+    // "CANCEL <id>" (legacy) or "CANCEL <id> <reason>" (added 1.4.2). Only the
+    // id is required; the reason just picks the notice text.
+    if (SDL_sscanf(line, "CANCEL %36s %15s", match_id, reason) < 1) {
         SDL_Log("Fistbump: failed to parse CANCEL\n");
         return;
     }
@@ -789,21 +880,69 @@ void Fistbump_HandleCANCEL(const char* line) {
         return;
     }
 
-    SDL_Log("Fistbump: match cancelled\n");
-    Netplay_Log("CANCEL", "peer disconnected mid-match state=%d", (int)state);
+    SDL_Log("Fistbump: match cancelled (%s)\n", reason[0] ? reason : "peer");
+    Netplay_Log("CANCEL", "reason=%s state=%d", reason[0] ? reason : "?", (int)state);
     SDL_zero(match_result);
 
-    if (state == FISTBUMP_MATCHED) {
-        state = FISTBUMP_IDLE;
-    } else if (state == FISTBUMP_GAME_START) {
-        // Fast-disconnect: peer closed TCP → tear down without waiting gekko UDP timeout.
+    if (state == FISTBUMP_GAME_START) {
+        // Fast-disconnect: peer closed TCP mid-handshake → tear down without
+        // waiting for the gekko UDP timeout.
         extern bool fistbump_peer_cancelled;
         fistbump_peer_cancelled = true;
+        return;
+    }
+
+    // MATCHED (accept dialog still up) or SENDING_UDP (we already accepted and
+    // are punching): the match is dead either way. Drop the ephemeral UDP
+    // socket if one was opened and return to the hub with a notice — otherwise
+    // a SENDING_UDP client keeps punching a now-empty match_id, input-locked on
+    // "Connecting...", until the 25s watchdog fires a misleading connection
+    // error. (Previously SENDING_UDP fell through here and did nothing.)
+    if (udp_sock != NULL) {
+        NET_DestroyDatagramSocket(udp_sock);
+        udp_sock = NULL;
+    }
+    udp_retry_timer = 0;
+    SDL_strlcpy(last_error,
+                (SDL_strcmp(reason, "declined") == 0) ? "Opponent declined."
+                                                       : "Match cancelled.",
+                sizeof(last_error));
+    state = FISTBUMP_IDLE;
+}
+
+static void Fistbump_HandleQUEUE(const char* line) {
+    // Server queue-status notices (all added 1.4.2; older servers never emit
+    // them, so this is purely additive).
+    //   "QUEUE timeout"          — the idle window elapsed; we were dequeued.
+    //   "QUEUE requeued <mode>"  — the found match fell through (peer declined
+    //                              or never punched); we were put back in queue.
+    char word[16] = { 0 };
+    if (SDL_sscanf(line, "QUEUE %15s", word) != 1) {
+        return;
+    }
+    if (SDL_strcmp(word, "timeout") == 0) {
+        SDL_strlcpy(last_error, "Matchmaking timed out — try again.", sizeof(last_error));
+        state = FISTBUMP_IDLE;
+        Netplay_Log("QUEUE", "server timeout");
+    } else if (SDL_strcmp(word, "requeued") == 0) {
+        char mode[16] = { 0 };
+        if (SDL_sscanf(line, "QUEUE requeued %15s", mode) == 1 && mode[0] != '\0') {
+            SDL_strlcpy(last_queue_mode, mode, sizeof(last_queue_mode));
+        }
+        // Defensive: if a stray relay socket is still open from an aborted
+        // punch, drop it before resuming the search.
+        if (udp_sock != NULL) {
+            NET_DestroyDatagramSocket(udp_sock);
+            udp_sock = NULL;
+        }
+        udp_retry_timer = 0;
+        state = FISTBUMP_AWAITING_MATCH;
+        Netplay_Log("QUEUE", "server requeued mode=%s", last_queue_mode);
     }
 }
 
 void Fistbump_HandleSTART(const char* line) {
-    // Newest format (Phase-2 mode-select):
+    // Newest format:
     //   "START <player> <relay_ip>:<relay_port> <uuid> <use_relay> <direct_ip>:<direct_port>"
     // Previous extended:
     //   "START <player> <ip>:<port> <uuid> <use_relay>"
@@ -887,8 +1026,6 @@ void Fistbump_ParseCommand(const char* line) {
         Fistbump_HandleSESSION(line);
     } else if (strncmp(line, "VERSION ", 8) == 0) {
         Fistbump_HandleVERSION(line);
-    } else if (strncmp(line, "DAG ", 4) == 0) {
-        Fistbump_HandleDAG(line);
     } else if (strncmp(line, "UDP ", 4) == 0) {
         Fistbump_HandleUDP(line);
     } else if (strncmp(line, "TOKEN ", 6) == 0) {
@@ -899,6 +1036,8 @@ void Fistbump_ParseCommand(const char* line) {
         Fistbump_HandleMATCH(line);
     } else if (strncmp(line, "CANCEL ", 7) == 0) {
         Fistbump_HandleCANCEL(line);
+    } else if (strncmp(line, "QUEUE ", 6) == 0) {
+        Fistbump_HandleQUEUE(line);
     } else if (strncmp(line, "START ", 6) == 0) {
         Fistbump_HandleSTART(line);
     } else if (strncmp(line, "CHAT ", 5) == 0) {
@@ -911,6 +1050,8 @@ void Fistbump_ParseCommand(const char* line) {
         extern bool fistbump_peer_loading;
         fistbump_peer_loading = (line[8] == '1');
         Netplay_Log("LOADING", "peer=%d", fistbump_peer_loading ? 1 : 0);
+    } else if (strncmp(line, "PONG", 4) == 0) {
+        last_pong_ms = SDL_GetTicks();  // heartbeat reply — link is alive
     }
 }
 
@@ -941,7 +1082,7 @@ void Fistbump_TickLoadingSignal(bool local_busy) {
     }
     char msg[16];
     SDL_snprintf(msg, sizeof(msg), "LOADING %d\n", local_busy ? 1 : 0);
-    NET_WriteToStreamSocket(tcp_sock, msg, (int)SDL_strlen(msg));
+    fb_send(msg, (int)SDL_strlen(msg));
     Netplay_Log("LOADING", "local=%d", local_busy ? 1 : 0);
     last_sent = local_busy;
 }
@@ -1113,6 +1254,30 @@ void Fistbump_Run() {
         }
     }
 
+    // Heartbeat: keep the TCP session marked alive server-side and detect a
+    // silently-dropped link. Only while actually connected (never pre-connect).
+    if (tcp_sock != NULL && connect_state == FISTBUMP_CONN_CONNECTED) {
+        const Uint64 nowms = SDL_GetTicks();
+        if (last_ping_ms == 0) {
+            last_ping_ms = nowms;
+        }
+        if (nowms - last_ping_ms >= 60000) {
+            fb_send("PING\n", 5);
+            last_ping_ms = nowms;
+        }
+        if (last_pong_ms != 0 && (nowms - last_pong_ms) > 90000) {
+            Netplay_Log("HEARTBEAT", "no PONG for %llu ms in state %d",
+                        (unsigned long long)(nowms - last_pong_ms), (int)state);
+            if (state == FISTBUMP_GAME_START) {
+                fistbump_peer_cancelled = true;
+            } else if (state != FISTBUMP_IDLE && state != FISTBUMP_ERROR) {
+                SDL_strlcpy(last_error, "Connection to server lost.", sizeof(last_error));
+                state = FISTBUMP_ERROR;
+            }
+            last_pong_ms = 0;
+        }
+    }
+
     switch (state) {
     case FISTBUMP_IDLE:
     case FISTBUMP_CONNECTING:
@@ -1175,10 +1340,6 @@ const MatchResult* Fistbump_GetResult() {
 
 NET_DatagramSocket* Fistbump_GetSocket() {
     return udp_sock;
-}
-
-DAG Fistbump_GetDAG() {
-    return dag;
 }
 
 bool Fistbump_IsLoggedIn() {

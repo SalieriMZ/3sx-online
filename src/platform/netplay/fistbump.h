@@ -39,6 +39,10 @@ typedef struct {
     char match_id[37];
     int player; // 1 or 2
     char opponent_name[64];
+    // ELO of each side at MATCH time (additive tokens on the MATCH line,
+    // 1.9.0). 0 = unknown (older server / anon / edge without user rows).
+    int my_elo;
+    int opp_elo;
     char ip[64];     // remote peer IP string
     int remote_port; // remote peer game port (parsed from "ip:port")
     // Phase-1 relay (server-side routing):
@@ -48,17 +52,16 @@ typedef struct {
 } MatchResult;
 
 typedef struct {
-    char code[9];
-    char activate_url[128];
-} DAG;
-
-typedef struct {
     char token[1024];
     int expiry;
 } JWT;
 
 typedef struct {
     char username[64];
+    int  elo;            // internal ELO (1000 default); -1 if not reported
+    char rank[24];       // "Unranked" | SF6 tier ("Gold", "Master", ...)
+    int  rank_sub;       // 1..5 sub-rank; 0 for Master/Unranked
+    int  main_char;      // most-played fighter id 0..19; -1 if none yet
 } Fistbump_Profile;
 
 void Fistbump_Start(const char* server_ip, int tcp_port, int udp_port, const char* pref_path);
@@ -67,9 +70,6 @@ void Fistbump_Connect();
 // Transitions to LOGGING_IN; success arrives via PROFILE / TOKEN messages.
 void Fistbump_Register(const char* username, const char* password);
 void Fistbump_LoginDirect(const char* username, const char* password);
-// Reconnect to a different matchmaking server (region picker). Tears down
-// + re-Starts on the same prefpath. Must be user-driven.
-void Fistbump_SetServer(const char* server_ip, int tcp_port, int udp_port);
 // SET force_relay wire cmd — advertises CGNAT mitigation preference for the
 // session. Safe to call mid-session; server forwards to peer at MATCH time.
 void Fistbump_SetForceRelay(int v);
@@ -78,6 +78,11 @@ const char* Fistbump_GetLastError(void);
 void Fistbump_ClearError(void);
 // Username from current PROFILE response (empty if not logged in).
 const char* Fistbump_GetUsername(void);
+// Ranked stats from the PROFILE line (1.9.0). Elo is -1, rank label "" and main
+// char -1 when the server didn't report them (older server).
+int Fistbump_GetElo(void);
+const char* Fistbump_GetRankLabel(void);
+int Fistbump_GetMainChar(void);
 // Broker/server version reported in the SESSION line ("" if not reported).
 const char* Fistbump_GetServerVersion(void);
 
@@ -108,7 +113,7 @@ void Fistbump_RoomUnslot(void);
 void Fistbump_RoomStart(void);
 // Host-only. key in {best_of, timer, damage}.
 void Fistbump_RoomSettings(const char* key, int value);
-void Fistbump_SendResult(int my_wins, int opp_wins);
+void Fistbump_SendResult(int my_wins, int opp_wins, int my_char, int opp_char);
 
 // One-shot TCP connect timer (no auth). Returns RTT in ms on success, < 0 on
 // failure. Synchronous — caller runs on background thread. Used by region
@@ -146,7 +151,6 @@ FistbumpState Fistbump_GetState();
 FistbumpConnectState Fistbump_GetConnectState();
 const MatchResult* Fistbump_GetResult();  // valid when MATCHED
 NET_DatagramSocket* Fistbump_GetSocket(); // ephemeral UDP socket, valid when MATCHED
-DAG Fistbump_GetDAG();
 bool Fistbump_IsLoggedIn();
 void Fistbump_Logout();
 void Fistbump_Reset();

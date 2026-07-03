@@ -109,7 +109,18 @@ void Netplay_Log(const char* category, const char* fmt, ...) {
 
     size_t written = SDL_WriteIO(log_io, line, (size_t)total);
     log_bytes += written;
-    SDL_FlushIO(log_io);
+    // Batch flushes: rollback storms emit a line per frame, and an fsync per
+    // line stalled the relay forward. Flush on a cadence instead, but flush the
+    // forensically-important categories immediately so a crash keeps them.
+    static int since_flush = 0;
+    const bool urgent = category != NULL
+                        && (SDL_strcmp(category, "SESSION") == 0
+                            || SDL_strcmp(category, "DISCONNECT") == 0
+                            || SDL_strcmp(category, "DESYNC") == 0);
+    if (urgent || ++since_flush >= 60) {
+        SDL_FlushIO(log_io);
+        since_flush = 0;
+    }
 }
 
 void Netplay_LogPerFrame(int frame, float frames_behind, int rollbacks_this_frame) {

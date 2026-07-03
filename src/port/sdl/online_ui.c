@@ -7,6 +7,7 @@
 #include "platform/netplay/netplay.h"
 #include "platform/netplay/netplay_log.h"
 #include "platform/netplay/regions.h"
+#include "platform/netplay/replay.h"
 #include "port/config/config.h"
 #include "port/creds.h"
 #include "port/sdl/text_input.h"
@@ -52,7 +53,20 @@ typedef enum {
     OUI_MATCHED,      // accept / decline
     OUI_ERROR,        // connection error + retry
     OUI_UPDATE,       // in-game "update available" notice
+    OUI_REPLAYS,      // saved-replay browser
 } OnlineUISubState;
+
+#define REPLAY_LIST_MAX 20
+static ReplayEntry g_replays[REPLAY_LIST_MAX];
+static int g_replay_count = 0;
+static int replay_cursor = 0;
+static int replay_scroll = 0;
+static char replay_msg[96] = { 0 };
+
+// Transient overlay notice ("REPLAY SAVED"). Render-only, drawn over anything
+// (incl. gameplay), never sim state — safe to trigger on one machine only.
+static char toast_text[48] = { 0 };
+static int toast_frames = 0;
 
 typedef enum {
     PT_NONE,
@@ -106,6 +120,28 @@ static void put(u16 y, u32 col, const char* s) {
 // Centered on an arbitrary x (for corner text).
 static void put_x(u16 x, u16 y, u32 col, const char* s) {
     SSPutStrPro(1, x, y, 9, col, s);
+}
+
+// Text width in the 384-wide screen space (sc_sub.c).
+extern s32 SSGetDrawSizePro(const s8* str);
+
+// Non-zero only while the in-fight HUD (health bars/timer/gauges) is up — 0
+// during char-select, round transitions and the result/rematch menus. In the
+// rollback save-state, so it's reproduced correctly during replay playback.
+extern u8 Disp_Cockpit;
+
+// Left-aligned: the string starts exactly at x (flag 0 = literal left edge).
+static void put_left(u16 x, u16 y, u32 col, const char* s) {
+    SSPutStrPro(0, x, y, 9, col, s);
+}
+
+// Right-aligned: the string ends at right_x.
+static void put_right(u16 right_x, u16 y, u32 col, const char* s) {
+    int x = (int)right_x - (int)SSGetDrawSizePro((const s8*)s);
+    if (x < 0) {
+        x = 0;
+    }
+    SSPutStrPro(0, (u16)x, y, 9, col, s);
 }
 
 static void draw_list(const char** items, int count, int cursor, u16 y0, u16 dy) {
@@ -231,7 +267,7 @@ static void tick_login(void) {
 //  Hub (logged in, idle, no room)
 // ---------------------------------------------------------------------------
 
-enum { HUB_RANKED, HUB_CASUAL, HUB_CREATE, HUB_JOIN, HUB_REGION, HUB_RELAY, HUB_LOGOUT, HUB_COUNT };
+enum { HUB_RANKED, HUB_CASUAL, HUB_CREATE, HUB_JOIN, HUB_REPLAYS, HUB_REGION, HUB_RELAY, HUB_LOGOUT, HUB_COUNT };
 
 static void render_hub(void) {
     const Region* cur = Regions_Get(Regions_GetSelectedIdx());
@@ -247,24 +283,47 @@ static void render_hub(void) {
     const u32 glow = (rr << 24) | (0xFFu << 16) | (bb << 8) | 0xFFu; // RRGGBBAA
     put(62, glow, title);
 
+    // Rank + ELO line under the title (1.9.0), when the server reported them.
+    const char* rank = Fistbump_GetRankLabel();
+    if (rank[0] != '\0') {
+        char rankline[64];
+        const int elo = Fistbump_GetElo();
+        if (SDL_strcmp(rank, "Unranked") == 0) {
+            SDL_snprintf(rankline, sizeof(rankline), "Unranked  (ELO %d)", elo);
+        } else {
+            SDL_snprintf(rankline, sizeof(rankline), "%s  (ELO %d)", rank, elo);
+        }
+        put(74, COLOR_GRAY, rankline);
+    }
+
     char relay[40];
     SDL_snprintf(relay, sizeof(relay), "Force relay: %s", force_relay_on() ? "ON" : "OFF");
     const char* items[HUB_COUNT] = {
         "Find ranked match", "Find casual match", "Create private room",
-        "Join private room", "Change region", relay, "Log out",
+        "Join private room", "Watch replays", "Change region", relay, "Log out",
     };
-    draw_list(items, HUB_COUNT, hub_cursor, 84, 16);
-    put(202, COLOR_GRAY, "Confirm: select   Cancel: back");
+    // Tighter spacing (dy 13) so all 8 rows + the footer clear the bottom-right
+    // version corner (drawn globally at y=206/216).
+    draw_list(items, HUB_COUNT, hub_cursor, 82, 13);
+    // Transient notice from the last match attempt (e.g. "Opponent declined.",
+    // "Matchmaking timed out — try again."). Cleared as soon as the user acts.
+    const char* err = Fistbump_GetLastError();
+    if (err != NULL && err[0] != '\0') {
+        put(188, COLOR_GRAY, err);
+    }
+    put(196, COLOR_GRAY, "Confirm: select   Cancel: back");
 }
 
 static void tick_hub(void) {
     nav_cursor(&hub_cursor, HUB_COUNT);
     if (!pressed_confirm()) {
         if (pressed_cancel()) {
+            Fistbump_ClearError();
             exit_requested = true;
         }
         return;
     }
+    Fistbump_ClearError();
     switch (hub_cursor) {
     case HUB_RANKED:
         Fistbump_QueueMode("ranked");
@@ -280,6 +339,13 @@ static void tick_hub(void) {
         roomcode_buf[0] = '\0';
         open_text(PT_ROOMCODE, "Room code", "", false, ROOMCODE_MAX);
         break;
+    case HUB_REPLAYS:
+        g_replay_count = Replay_ListDir(g_replays, REPLAY_LIST_MAX);
+        replay_cursor = 0;
+        replay_scroll = 0;
+        replay_msg[0] = '\0';
+        sub = OUI_REPLAYS;
+        break;
     case HUB_REGION:
         region_cursor = Regions_GetSelectedIdx();
         sub = OUI_REGION;
@@ -294,6 +360,80 @@ static void tick_hub(void) {
     case HUB_LOGOUT:
         Fistbump_Logout();
         break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Replay browser
+// ---------------------------------------------------------------------------
+
+#define REPLAY_ROWS_VISIBLE 5
+
+static void render_replays(void) {
+    char title[48];
+    if (g_replay_count > 0) {
+        SDL_snprintf(title, sizeof(title), "Saved replays  (%d/%d)",
+                     replay_cursor + 1, g_replay_count);
+    } else {
+        SDL_strlcpy(title, "Saved replays", sizeof(title));
+    }
+    put(72, COLOR_WHITE, title);
+
+    if (g_replay_count <= 0) {
+        put(110, COLOR_GRAY, "No replays available.");
+        put(126, COLOR_GRAY, "Finish an online match to record one.");
+    } else {
+        // Scroll window: newest first, REPLAY_ROWS_VISIBLE rows at a time.
+        if (replay_scroll > replay_cursor) {
+            replay_scroll = replay_cursor;
+        }
+        if (replay_scroll < replay_cursor - (REPLAY_ROWS_VISIBLE - 1)) {
+            replay_scroll = replay_cursor - (REPLAY_ROWS_VISIBLE - 1);
+        }
+        if (replay_scroll > 0) {
+            put(88, COLOR_GRAY, "^ more");
+        }
+        for (int row = 0; row < REPLAY_ROWS_VISIBLE; row++) {
+            const int i = replay_scroll + row;
+            if (i >= g_replay_count) {
+                break;
+            }
+            char line[128];
+            SDL_snprintf(line, sizeof(line), "%s %s",
+                         (i == replay_cursor) ? ">" : " ", g_replays[i].label);
+            put((u16)(98 + row * 16), (i == replay_cursor) ? COLOR_YELLOW : COLOR_WHITE, line);
+        }
+        if (replay_scroll + REPLAY_ROWS_VISIBLE < g_replay_count) {
+            put(178, COLOR_GRAY, "v more");
+        }
+        // Selected entry detail: ELOs at match time + build/protocol it was
+        // recorded on (playback needs the identical build).
+        if (g_replays[replay_cursor].detail[0] != '\0') {
+            put(188, COLOR_GRAY, g_replays[replay_cursor].detail);
+        }
+    }
+    if (replay_msg[0] != '\0') {
+        put(198, COLOR_RED, replay_msg);
+    }
+    put(208, COLOR_GRAY, "Confirm: watch   Cancel: back");
+}
+
+static void tick_replays(void) {
+    if (g_replay_count > 0) {
+        nav_cursor(&replay_cursor, g_replay_count);
+    }
+    if (pressed_confirm() && g_replay_count > 0) {
+        const char* path = g_replays[replay_cursor].path;
+        if (Netplay_BeginReplay(path)) {
+            OnlineUI_Hide();  // hand control to the sim; playback drives the game
+        } else {
+            const char* e = Replay_GetError();
+            SDL_strlcpy(replay_msg, (e && e[0]) ? e : "Could not play replay.",
+                        sizeof(replay_msg));
+        }
+    } else if (pressed_cancel()) {
+        replay_msg[0] = '\0';
+        sub = OUI_HUB;
     }
 }
 
@@ -645,7 +785,10 @@ static void sync_sub(void) {
                 sub = OUI_ROOM;
                 room_cursor = 0;
             }
-        } else if (sub != OUI_HUB && sub != OUI_REGION) {
+        } else if (sub != OUI_HUB && sub != OUI_REGION && sub != OUI_REPLAYS) {
+            // OUI_REGION and OUI_REPLAYS are user-opened sub-screens of the hub;
+            // stomping them back to OUI_HUB here made the replay browser flicker
+            // (hub/browser alternating every frame).
             sub = OUI_HUB;
             hub_cursor = 0;
         }
@@ -746,6 +889,17 @@ void OnlineUI_Tick(void) {
     g_pad_prev = cur_sw;
     g_frame++;
 
+    // Replay playback quick-exit: the UI is hidden while a replay runs (the sim
+    // owns the screen), but the pad edges above are still live — Start bails out
+    // to the Network menu immediately. HandleMenuExit keeps the login session
+    // alive for a replay (see the was_replay teardown).
+    if (Netplay_GetSessionState() == NETPLAY_SESSION_REPLAYING) {
+        if (g_pad_pressed & SWK_START) {
+            Netplay_HandleMenuExit();
+        }
+        return;
+    }
+
     if (!visible) {
         return;
     }
@@ -820,6 +974,7 @@ void OnlineUI_Tick(void) {
     case OUI_LOGIN_ACTION: tick_login(); break;
     case OUI_REGION:       tick_region(); break;
     case OUI_HUB:          tick_hub(); break;
+    case OUI_REPLAYS:      tick_replays(); break;
     case OUI_ROOM:         tick_room(); break;
     case OUI_SEARCHING:
         if (pressed_cancel()) {
@@ -861,7 +1016,62 @@ void OnlineUI_Tick(void) {
     }
 }
 
+void OnlineUI_ShowToast(const char* text) {
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+    SDL_strlcpy(toast_text, text, sizeof(toast_text));
+    toast_frames = 210; // ~3.5s at 60fps
+}
+
 void OnlineUI_Render(void) {
+    // Toast draws over EVERYTHING (menus, gameplay, hidden UI) — it must render
+    // before the visibility/state gates below. Placed mid-screen and blinking so
+    // it's unmissable over the busy VS-result banner (y=52 there sat under it).
+    if (toast_frames > 0) {
+        if ((toast_frames / 10) % 2 == 0) {
+            put(100, COLOR_GREEN, toast_text);
+        }
+        toast_frames--;
+    }
+
+    // Floating overlay while a replay plays (UI is hidden, sim owns the screen).
+    // Clear of the top HUD (health/timer) and the bottom super gauges.
+    const bool in_replay = (Netplay_GetSessionState() == NETPLAY_SESSION_REPLAYING);
+    if (in_replay) {
+        put(44, COLOR_YELLOW, "> REPLAY RUNNING");
+        put(192, COLOR_GRAY, "Start: exit replay");
+    }
+
+    // Player usernames under the health bars, for online matches AND replays
+    // (P1 left, P2 right; the middle stays clear for the centered overlays).
+    // Gated on Disp_Cockpit so they show only during the fight — hidden on
+    // char-select, round transitions and the result/rematch menus.
+    if ((in_replay || Fistbump_GetState() == FISTBUMP_GAME_START) && Disp_Cockpit) {
+        const char* n1 = NULL;
+        const char* n2 = NULL;
+        if (in_replay) {
+            const ReplayHeader* h = Replay_PlaybackHeader();
+            if (h != NULL) {
+                n1 = h->name_p1;
+                n2 = h->name_p2;
+            }
+        } else {
+            const char* self = Fistbump_GetUsername();
+            const MatchResult* mr = Fistbump_GetResult();
+            const char* opp = (mr != NULL && mr->opponent_name[0]) ? mr->opponent_name : "";
+            const int local = Netplay_GetLocalPlayer();  // local slot 0/1
+            n1 = (local == 0) ? self : opp;
+            n2 = (local == 0) ? opp : self;
+        }
+        if (n1 != NULL && n1[0] != '\0') {
+            put_left(40, 42, COLOR_WHITE, n1);
+        }
+        if (n2 != NULL && n2[0] != '\0') {
+            put_right(344, 42, COLOR_WHITE, n2);
+        }
+    }
+
     if (!visible) {
         return;
     }
@@ -885,6 +1095,7 @@ void OnlineUI_Render(void) {
     case OUI_LOGIN_ACTION: render_login(); break;
     case OUI_REGION:       render_region(); break;
     case OUI_HUB:          render_hub(); break;
+    case OUI_REPLAYS:      render_replays(); break;
     case OUI_ROOM:         render_room(); break;
     case OUI_STATUS:       render_status(); break;
     case OUI_SEARCHING:    render_searching(); break;
@@ -898,17 +1109,17 @@ void OnlineUI_Render(void) {
     char vbuf[48];
     if (Fistbump_UpdateChecked() && Fistbump_UpdateAvailable()) {
         SDL_snprintf(vbuf, sizeof(vbuf), "3SX %s (update!)", BUILD_VERSION);
-        put_x(612, 196, COLOR_YELLOW, vbuf);
+        put_x(612, 204, COLOR_YELLOW, vbuf);
     } else if (Fistbump_UpdateChecked()) {
         SDL_snprintf(vbuf, sizeof(vbuf), "3SX %s (latest)", BUILD_VERSION);
-        put_x(612, 196, COLOR_GREEN, vbuf);
+        put_x(612, 204, COLOR_GREEN, vbuf);
     } else {
         SDL_snprintf(vbuf, sizeof(vbuf), "3SX %s", BUILD_VERSION);
-        put_x(612, 196, COLOR_GRAY, vbuf);
+        put_x(612, 204, COLOR_GRAY, vbuf);
     }
     const char* sv = Fistbump_GetServerVersion();
     SDL_snprintf(vbuf, sizeof(vbuf), "srv %s", (sv != NULL && sv[0]) ? sv : "?");
-    put_x(612, 210, COLOR_GRAY, vbuf);
+    put_x(612, 214, COLOR_GRAY, vbuf);
 }
 
 #endif // NETPLAY_ENABLED

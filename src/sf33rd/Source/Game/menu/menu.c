@@ -71,6 +71,7 @@
 #if NETPLAY_ENABLED
 #include "platform/netplay/fistbump.h"
 #include "platform/netplay/netplay.h"
+#include "platform/netplay/replay.h"
 #include "port/sdl/netplay_screen.h"
 #include "port/sdl/online_ui.h"
 #include "sf33rd/Source/Game/menu/netplay_menu.h"
@@ -3689,7 +3690,10 @@ s32 VS_Result_Select_Sub(struct _TASK* task_ptr, s16 PL_id) {
 u16 After_VS_Move_Sub(u16 sw, s16 cursor_id, s16 menu_max) {
     s16 skip;
 
-    if (plw[0].wu.operator == 0 || plw[1].wu.operator == 0 || Mode_Type == MODE_NETWORK) {
+    // Netplay (both operators are human) keeps the REPLAY row selectable so the
+    // post-match REPLAY button can save the recorded match. Only genuine
+    // CPU-participant matches (an operator == 0) skip it.
+    if (plw[0].wu.operator == 0 || plw[1].wu.operator == 0) {
         skip = 1;
     } else {
         skip = 99;
@@ -3779,6 +3783,21 @@ s32 VS_Result_Move_Sub(struct _TASK* task_ptr, s16 PL_id) {
 
         case 1:
             SE_selected();
+#if NETPLAY_ENABLED
+            // Netplay: each game is auto-saved to its own .3sxr as it ends (see
+            // run_netplay's per-game cut), so the PS2 memory-card Save_Replay flow
+            // at r_no[2]=5 doesn't apply. The REPLAY row just confirms the save.
+            // This menu runs inside the SYNCED sim — both machines execute both
+            // players' presses — so the toast shows only on the presser's machine
+            // (PL_id == local slot); the sim path (sound + return) is identical.
+            if (Mode_Type == MODE_NETWORK) {
+                if (PL_id == Netplay_GetLocalPlayer()) {
+                    OnlineUI_ShowToast(Replay_LastSavedPath() != NULL
+                                       ? "REPLAY SAVED" : "NO REPLAY TO SAVE");
+                }
+                return 1;
+            }
+#endif
             task_ptr->r_no[2] = 5;
             task_ptr->r_no[3] = 0;
             task_ptr->timer = 15;
