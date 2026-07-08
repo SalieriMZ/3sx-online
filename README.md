@@ -29,7 +29,7 @@ Builds from a single source tree for **Windows**, **macOS**, **Linux**, and **An
 
 - **Discord** — the **3SX Online** server is where matchmaking happens, and where playtesting, bug reports, and announcements live: [discord.gg/aume4RqnnP](https://discord.gg/aume4RqnnP)
 - **Issues** — file bugs / feature requests at [GitHub Issues](https://github.com/SalieriMZ/3sx-online/issues).
-- **Reference matchmaking server** — [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server). Run your own or talk to us about joining a hosted instance.
+- **Reference matchmaking server** — [`SalieriMZ/3sx-online-server`](https://github.com/SalieriMZ/3sx-online-server). Run your own or talk to us about joining a hosted instance.
 
 ---
 
@@ -138,7 +138,7 @@ You can confirm which path the game actually loaded by running `3sx --version` a
 
 ### Deploying with your own infrastructure
 
-The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server). If you're running your own instance and packaging a build for your community, the knobs you'll want to know about are:
+The reference matchmaking server lives at [`SalieriMZ/3sx-online-server`](https://github.com/SalieriMZ/3sx-online-server). If you're running your own instance and packaging a build for your community, the knobs you'll want to know about are:
 
 | What | Where | Notes |
 |---|---|---|
@@ -147,7 +147,7 @@ The reference matchmaking server lives at [`SalieriMZ/fistbump-server`](https://
 | Build version stamp | `-DBUILD_VERSION=1.9.0` at cmake configure | Printed by `3sx --version`. Auto-detected from `CMakeLists.txt` if omitted. |
 | Build git SHA stamp | `-DBUILD_GIT_SHA=abc1234` at cmake configure | Auto-detected via `git rev-parse --short HEAD` if you build from a checkout. |
 | Android package name | `applicationId` in `android-project/app/build.gradle` | Defaults to `cl.chambeadores.threesx` (the reference community build). Change it before publishing your own APK so installs don't collide — and keep the `PKG` variable in `android-project/install-and-run.bat` in sync. |
-| Server version gate | `ALLOWED_VERSIONS` in `fistbump-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
+| Server version gate | `ALLOWED_VERSIONS` in `3sx-online-server/server.py` | The server rejects clients whose version string isn't whitelisted. If you ship your own client builds, add each new version **before** rolling it out, or players get a login error. |
 | Status badges | `.github/workflows/server_status.yml` | Probes the hosts listed at the top of the workflow — change them to your own. Results are committed as shields.io JSON to an auto-generated `status` branch; never edit that branch by hand, the workflow overwrites it. |
 
 For a complete walk-through (clone → regions.txt → packaged zip), see `dist.sh` — invoking `bash dist.sh pc 1.8.2` with `REGIONS_FILE=path/to/regions.txt` produces a ready-to-share zip under `dist/`. The DLL closure is resolved with `objdump`, so the zip ships only what the binary actually links — no stray `/mingw64/bin` codecs.

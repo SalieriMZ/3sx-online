@@ -9,7 +9,7 @@ If you want to contribute, this file describes the workflow, the layout of the r
 | Path | Purpose |
 |---|---|
 | [`SalieriMZ/3sx-online`](https://github.com/SalieriMZ/3sx-online) | The game client. Everything that runs on your PC / phone / Vita. |
-| [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server) | The fistbump matchmaking server. |
+| [`SalieriMZ/3sx-online-server`](https://github.com/SalieriMZ/3sx-online-server) | The matchmaking / broker server (speaks the fistbump protocol). |
 
 The client tracks upstream `crowded-street/3sx` as the `upstream` remote. Game-engine fixes flow upstream-first whenever it makes sense; netplay-specific work lives here.
 
@@ -43,7 +43,7 @@ If you change any of `build-deps*.sh`, the third_party cache key changes — fir
 
 ## Hosting your own matchmaking server
 
-A reference deployment is documented in the [`SalieriMZ/fistbump-server`](https://github.com/SalieriMZ/fistbump-server) README. Two ways:
+A reference deployment is documented in the [`SalieriMZ/3sx-online-server`](https://github.com/SalieriMZ/3sx-online-server) README. Two ways:
 
 1. Run `python server.py` locally on `localhost:19000` for development.
 2. Use `deploy.sh` to ship the systemd unit to your own Linux box (set `REMOTE_HOST`, `SSH_KEY`, `PUBLIC_HOST` env vars).
