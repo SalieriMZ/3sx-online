@@ -43,11 +43,10 @@ jobs:
         run: |
           set -e
           # Endpoints come from repo secrets (host:port) so production IPs are
-          # never committed. Set STATUS_HOST_US_EAST_1 / STATUS_HOST_SA_EAST_1 in
+          # never committed. Set STATUS_HOST_US_EAST_1 in
           # the repo's Actions secrets; entries left empty are skipped.
           declare -A HOSTS=(
             [us-east-1]=${{ secrets.STATUS_HOST_US_EAST_1 }}
-            [sa-east-1]=${{ secrets.STATUS_HOST_SA_EAST_1 }}
           )
           any_down=0
           summary=""

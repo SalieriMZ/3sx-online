@@ -1,7 +1,6 @@
 # 3SX Online
 
 [![us-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/us-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
-[![sa-east-1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/sa-east-1.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
 [![fistbump](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/SalieriMZ/3sx-online/status/status/all.json)](https://github.com/SalieriMZ/3sx-online/actions/workflows/server_status.yml)
 [![Discord](https://img.shields.io/badge/Discord-3SX%20Online-5865F2?logo=discord&logoColor=white)](https://discord.gg/aume4RqnnP)
 
